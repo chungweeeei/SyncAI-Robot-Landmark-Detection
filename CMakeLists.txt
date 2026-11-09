@@ -29,8 +29,20 @@ find_package(syncai_common REQUIRED)
 # and the fisheye model.
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs calib3d aruco)
 
-# The repo is set up before any code: the plugin interface, the ArUco plugin
-# and landmark_detector are added here as they are written.
+set(dependencies
+  rclcpp
+  geometry_msgs
+  sensor_msgs
+  tf2_ros
+  tf2_geometry_msgs
+  pluginlib
+  syncai_common
+)
+
+# The plugin interface (landmark_detector.hpp) is header-only, as
+# syncai_nav_core's is: installed below and exported, so a detector plugin in
+# another package can build against it. The server and the ArUco plugin are
+# added here as they are written.
 
 install(DIRECTORY launch params
   DESTINATION share/${PROJECT_NAME}
@@ -50,5 +62,8 @@ if(BUILD_TESTING)
   set(ament_cmake_uncrustify_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
 endif()
+
+ament_export_include_directories(include)
+ament_export_dependencies(${dependencies})
 
 ament_package()
