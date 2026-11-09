@@ -1,0 +1,18 @@
+# Source dependencies of syncai_landmark_detection that are colcon packages rather than apt /
+# image installs, pinned to what SyncAI-Robot-Workspace uses (its dependencies.repos):
+#
+# - syncai_common (SyncAI-Robot-Interface): DetectLandmark (served) and the other shared msg / srv.
+#
+# The Dev Container imports it on creation (postCreateCommand) and CI imports it in ci.sh. By hand,
+# inside the container, from the workspace root (the keys already include `src/`):
+#
+#   cd /workspace && vcs import --skip-existing < src/syncai_landmark_detection/dependencies.repos
+#   cd /workspace && vcs import --force < src/syncai_landmark_detection/dependencies.repos  # after a pin change
+#
+# These land next to this package in the workspace, never inside this repo. Never add --shallow if
+# a pin becomes a commit SHA. Keep the pins in step with SyncAI-Robot-Workspace.
+repositories:
+  src/syncai_common:
+    type: git
+    url: https://github.com/chungweeeei/SyncAI-Robot-Interface.git
+    version: dev

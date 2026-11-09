@@ -1,0 +1,40 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>syncai_landmark_detection</name>
+  <version>0.0.0</version>
+  <description>
+    Landmark detection for the last metre of a charge. landmark_detector
+    serves syncai_common/DetectLandmark: where a known landmark is right now,
+    as seen by the robot's own sensors, and nothing more -- it never commands
+    motion. The detection methods are pluginlib plugins (ArUco first, ported
+    from SyncAI-Robot-Charger's detector_node), picked per landmark by the
+    node's landmark registry.
+  </description>
+  <maintainer email="chungweeeei@gmail.com">andy_tseng</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>geometry_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>tf2_ros</depend>
+  <depend>tf2_geometry_msgs</depend>
+  <!-- The detector plugins, one per detection method. -->
+  <depend>pluginlib</depend>
+  <!-- DetectLandmark (served); from `vcs import < dependencies.repos`. -->
+  <depend>syncai_common</depend>
+  <!-- cv::aruco is in the contrib module; Ubuntu 22.04's OpenCV 4.5.4 has
+       the pre-4.7 aruco API. -->
+  <depend>libopencv-dev</depend>
+  <depend>libopencv-contrib-dev</depend>
+
+  <test_depend>ament_cmake_gtest</test_depend>
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
