@@ -12,7 +12,12 @@ SyncAI-Robot-Workspace polls it and hands the target to the controller server's 
 Detection methods are pluginlib plugins, picked per landmark by the node's landmark registry; ArUco
 is the first, ported from SyncAI-Robot-Charger's `detector_node`.
 
-Status: repository set up; no code yet.
+Plugins follow SyncAI-Robot-Workspace's planner / controller plugins: an abstract
+`syncai_landmark_detection::LandmarkDetector` (`include/syncai_landmark_detection/landmark_detector.hpp`)
+loaded with pluginlib from `detector_plugins` / `<id>.plugin`. A plugin owns its sensor and keeps the
+newest sighting per landmark; the server answers the service and transforms.
+
+Status: the plugin interface; the server and the ArUco plugin come next.
 
 ## Build and test
 

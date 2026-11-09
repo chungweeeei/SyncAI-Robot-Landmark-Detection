@@ -2,8 +2,8 @@
 
 The ROS 2 package `syncai_landmark_detection` (C++17, `rclcpp`): landmark detection for the last
 metre of a charge. One node, `landmark_detector`, serving `syncai_common/srv/DetectLandmark`.
-Set up on 2026-11-09 with no code yet; the plugin interface, the landmark registry and the ArUco
-plugin come next.
+Set up on 2026-11-09; so far the plugin interface only. The server (registry, service, standby,
+transform) and the ArUco plugin come next.
 
 **The detector only detects.** It returns where a landmark is (6-DOF, in `target_frame`, transformed
 at the image stamp) and facts about the sighting (`age`, `consecutive`, `ambiguous`,
@@ -18,6 +18,19 @@ SyncAI-Robot-Charger's `detector_node`: `MarkerPose`, `BranchTracker`). The call
 never a method: the node's landmark registry (its params file) maps each `landmark_id` to a plugin
 and the landmark's own parameters (ArUco: dictionary, marker id, printed size — the size is per
 landmark).
+
+**Plugins are made the way SyncAI-Robot-Workspace's planner and controller plugins are**
+(`syncai_nav_core`): the abstract class `syncai_landmark_detection::LandmarkDetector`
+(`include/syncai_landmark_detection/landmark_detector.hpp`, header-only and exported), loaded with
+`pluginlib::ClassLoader` from `detector_plugins` + `<id>.plugin`, `initialize(node, name, tf)` on a
+plain `rclcpp::Node`, parameters under `name.` with `declare_parameter_if_not_declared`, a
+`<name>_plugin.xml` exported with `pluginlib_export_plugin_description_file`, and
+`PLUGINLIB_EXPORT_CLASS` in the plugin's `.cpp`. Two additions, each documented in the header:
+`addLandmark()` (one instance serves several landmarks) and `activate()` / `deactivate()` (a
+detector reads its sensor only while polled; not lifecycle). Split of work: a plugin owns its sensor
+subscriptions and keeps the newest sighting per landmark in the sensor frame; the server answers
+DetectLandmark, judges `max_age` and does the transform. `node_utils.hpp` copies `syncai_util`'s two
+parameter helpers rather than depend on that workspace package.
 
 **The camera has one opener** on the robot, `syncai_camera_feeder`. This package must never open the
 V4L2 device; it reads what the feeder publishes.
