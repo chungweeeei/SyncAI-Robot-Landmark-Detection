@@ -1,0 +1,7 @@
+<library path="syncai_landmark_detection_aruco">
+  <class name="syncai_landmark_detection/ArucoDetector"
+         type="syncai_landmark_detection::ArucoDetector"
+         base_class_type="syncai_landmark_detection::LandmarkDetector">
+    <description>ArUco markers in syncai_camera_feeder's image_raw/compressed with its camera_info: the charger dock's tag, ported from SyncAI-Robot-Charger's detector_node.</description>
+  </class>
+</library>

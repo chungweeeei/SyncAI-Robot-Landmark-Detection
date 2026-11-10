@@ -1,0 +1,54 @@
+# landmark_detector (syncai_landmark_detection): the detector plugins and the
+# landmark registry. Loaded by launch/landmark_detector.launch.py.
+#
+# /**/<node> so the file works under any robot_id namespace.
+/**/landmark_detector:
+  ros__parameters:
+    use_sim_time: false
+    # DetectLandmark's max_age when the caller gives <= 0 [s].
+    default_max_age: 0.3
+    # A detector nobody has called this long stops reading its sensor [s].
+    idle_timeout: 5.0
+
+    detector_plugins: ["ArUco"]
+    ArUco:
+      plugin: "syncai_landmark_detection/ArucoDetector"
+      image_topic: image_raw/compressed
+      camera_info_topic: camera_info
+      frame_timeout: 1.0
+      # Everything below is SyncAI-Robot-Charger's tuning (config/detector.yaml,
+      # 2026-10); the plugin's source comments have why each value.
+      corner_refine_win_px: 2
+      roi_enabled: true
+      roi_margin: 0.75
+      roi_min_size_px: 160
+      max_rz_deg: 60.0
+      max_tilt_deg: 45.0
+      decisive_ratio: 3.0
+      decisive_margin_px: 0.3
+      refine_lm: true
+      refine_max_x_m: 0.6
+      refine_exit_x_m: 0.65
+      merge_rz_deg: 0.5
+      merge_y_m: 0.003
+      hint_hold_sec: 1.0
+      gate_y_m: 0.302
+      gate_rz_deg: 20.0
+      gate_relock: 5
+      gate_reset_sec: 0.5
+
+    # The registry. A landmark names its detector and carries that detector's
+    # parameters for it; a second dock is a second entry.
+    landmarks: ["charger_a"]
+    # The charging dock's print, as SyncAI-Robot-Charger docks to it
+    # (config/detector.yaml, 2026-10): marker 42 of DICT_6X6_250, an ordinary
+    # print. marker_size is the print's real side, black border outer edge:
+    # 0.088 there (2026-10-06, with the fisheye calibration; an 85 mm print was
+    # being compared). A different print: measure it, a wrong size is a wrong
+    # distance with no error.
+    charger_a:
+      detector: "ArUco"
+      dictionary: "DICT_6X6_250"
+      marker_id: 42
+      marker_size: 0.088
+      marker_inverted: false

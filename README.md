@@ -17,7 +17,70 @@ Plugins follow SyncAI-Robot-Workspace's planner / controller plugins: an abstrac
 loaded with pluginlib from `detector_plugins` / `<id>.plugin`. A plugin owns its sensor and keeps the
 newest sighting per landmark; the server answers the service and transforms.
 
-Status: the plugin interface; the server and the ArUco plugin come next.
+## Running it
+
+```bash
+ros2 launch syncai_landmark_detection landmark_detector.launch.py
+ros2 service call /<robot_id>/detect_landmark syncai_common/srv/DetectLandmark "{landmark_id: charger_a}"
+```
+
+The first call wakes the detector and answers `SENSOR_STARTING` (3); ask again. A detector nobody
+calls for `idle_timeout` (5 s) stops reading its sensor. The launch file takes `robot_id` from
+`config/system.ini` as the namespace, so the plugin reads `syncai_camera_feeder`'s
+`<robot_id>/image_raw/compressed` and `<robot_id>/camera_info`. `params/landmark_detector_params.yaml` holds the plugins and the landmark registry
+(`landmarks`, one entry per print, each naming its `detector`). Two entries with the same ArUco
+dictionary and `marker_id` stop the node at startup, whatever their `marker_inverted`: an inverted
+search decodes normal prints too, so one print would answer for both.
+
+What the server answers: `UNKNOWN_LANDMARK` (not in the registry); `SENSOR_STARTING` (just woken,
+or no frame / `camera_info` yet); `SENSOR_UNAVAILABLE` (no frame for `frame_timeout`, no
+`camera_info` — the feeder publishes none without its calibration file — a calibration for another
+resolution, an undecodable frame, a frame OpenCV threw on; cleared by the next good frame);
+`NOT_DETECTED` (no sighting newer than `max_age`, or one in an image stamped more than `max_age`
+ahead of the node's clock — the two clocks disagree; less than that ahead answers `age` 0);
+`TRANSFORM_FAILED`; otherwise the landmark's pose, stamped with the image's capture time. With
+`target_frame` empty it is in the camera's own frame, untransformed
+(`<robot_id>/camera_optical_frame`: z ahead, x right, y down), which needs no TF and works in every
+mode; any other frame is transformed at that stamp (`<robot_id>/base_link`: relative to the robot;
+`<robot_id>/odom`: fixed, AUTO only).
+
+## The ArUco plugin
+
+`syncai_landmark_detection/ArucoDetector`. Subscribes, only while active, to
+`image_raw/compressed` (SensorData QoS at depth 1, so a frame slower than the 30 Hz period drops
+the ones behind it rather than queueing them; decoded straight to grey) and `camera_info` (reliable +
+transient local: the feeder publishes it once, latched, so it is cached and never paired with an
+image by stamp). Every frame: the markers searched around where they were last seen (the whole
+frame when that misses), the outline picked, its corners undistorted with `camera_info`
+(`equidistant` as fisheye, else `plumb_bob` / `rational_polynomial`), both PnP solutions, the
+choice, the gate.
+
+The detection logic is SyncAI-Robot-Charger's `detector_node`, with its measured values
+(`plugins/aruco_detector/*` and the params file have the why of each): sub-pixel corners in a
+2 px window, `minMarkerDistanceRate` 0.01, the duplicate / white-line outline rule, the geometry
+check (|Rz| <= 60 deg, tilt <= 45 deg), the decisive image (3x + 0.3 px), the LM-refined pose
+below 0.6 m (out above 0.65 m) with two meeting refinements counted as decisive, the previous
+accepted normal as the hint, the gate against mirror jumps (0.302 m / 20 deg, 5 in a row to relock,
+reset after 0.5 s). Two changes of ours: the refinement is not tried while the IPPE pose is past
+0.70 m (it would be thrown away), and a pose the gate drops never becomes the hint (it did, and
+re-locked the gate onto the mirror). Its geometry and choice are ROS-free (`aruco_core`), covered by
+`test/test_marker_geometry.cpp` and `test/test_solution_selector.cpp`.
+
+Not ported, on purpose:
+- **The motion-based choice** (the charger's `BranchTracker`, gyro + Point-LIO). Two solutions the
+  image cannot tell apart are reported `ambiguous: true`, picked by the previous normal; the caller
+  decides. Expect it at ~1 m, rarely below 0.6 m. It can come back later from TF, not new
+  subscriptions.
+- **The smoothing.** Only the gate stays: smoothing in the camera frame lags and bends while the
+  robot moves; it belongs to whoever holds the pose in a fixed frame.
+- **The stream handling**: GStreamer, NV12, the detect-rate throttle, filling a missed frame from
+  the ones before, latency statistics, debug images, `pose_raw`, the field-of-view pinhole and the
+  calibration scaling (`camera_info` replaces them), `marker_mirrored`, switching `marker_id` live
+  (a second print is a second registry entry).
+
+Output differs from the charger's: the marker's 6-DOF pose in the camera frame at the capture stamp,
+transformed by the server, where the charger published the camera's (X, Y, Rz) in the marker frame,
+smoothed, stamped on arrival.
 
 ## Build and test
 

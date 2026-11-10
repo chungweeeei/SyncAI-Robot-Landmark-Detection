@@ -8,6 +8,7 @@
 // whole nav stack (syncai_costmap, ...) to build, and this repo builds on its
 // own against syncai_common only.
 
+#include <cstdio>
 #include <cstdlib>
 #include <string>
 
@@ -78,6 +79,19 @@ std::string get_plugin_type_param(NodeT node, const std::string & plugin_name)
   }
 
   return plugin_type;
+}
+
+/**
+ * @brief A duration for a log line or an error_msg, "0.35 s". Not from
+ * syncai_util: the server and the plugins used to carry their own copies, at
+ * different precisions. Two decimals, because ages are compared against a
+ * max_age of tenths (0.3 s).
+ */
+inline std::string formatSeconds(double s)
+{
+  char buffer[32];
+  std::snprintf(buffer, sizeof(buffer), "%.2f s", s);
+  return buffer;
 }
 
 }  // namespace syncai_landmark_detection
