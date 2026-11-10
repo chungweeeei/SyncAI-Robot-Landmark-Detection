@@ -32,7 +32,16 @@ plain `rclcpp::Node`, parameters under `name.` with `declare_parameter_if_not_de
 detector reads its sensor only while polled; not lifecycle). Split of work: a plugin owns its sensor
 subscriptions and keeps the newest sighting per landmark in the sensor frame; the server answers
 DetectLandmark, judges `max_age` and does the transform. `node_utils.hpp` copies `syncai_util`'s two
-parameter helpers rather than depend on that workspace package.
+parameter helpers rather than depend on that workspace package, plus `formatSeconds()`, the one
+duration format for logs and `error_msg`.
+
+**A plugin's sensor callback never throws and never computes under its lock.** An exception out of
+a callback ends the node mid-dock (the launch does not respawn it): `ArucoDetector::onImage` only
+wraps `processImage()` and turns what it throws into a `SENSOR_UNAVAILABLE` reason. `latest()` /
+`sensorStatus()` are called from the service thread and must not wait behind a frame:
+`processImage()` copies the landmarks' state under the mutex, searches and solves on the copies
+unlocked, and commits them under it again, dropping the frame if `activate()` / `deactivate()` ran
+meanwhile (`generation_`). A new plugin follows the same pattern.
 
 **The camera has one opener** on the robot, `syncai_camera_feeder`. This package must never open the
 V4L2 device; it reads what the feeder publishes.

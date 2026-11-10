@@ -28,12 +28,16 @@ The first call wakes the detector and answers `SENSOR_STARTING` (3); ask again. 
 calls for `idle_timeout` (5 s) stops reading its sensor. The launch file takes `robot_id` from
 `config/system.ini` as the namespace, so the plugin reads `syncai_camera_feeder`'s
 `<robot_id>/image_raw/compressed` and `<robot_id>/camera_info`. `params/landmark_detector_params.yaml` holds the plugins and the landmark registry
-(`landmarks`, one entry per print, each naming its `detector`).
+(`landmarks`, one entry per print, each naming its `detector`). Two entries with the same ArUco
+dictionary and `marker_id` stop the node at startup, whatever their `marker_inverted`: an inverted
+search decodes normal prints too, so one print would answer for both.
 
 What the server answers: `UNKNOWN_LANDMARK` (not in the registry); `SENSOR_STARTING` (just woken,
 or no frame / `camera_info` yet); `SENSOR_UNAVAILABLE` (no frame for `frame_timeout`, no
 `camera_info` — the feeder publishes none without its calibration file — a calibration for another
-resolution, an undecodable frame); `NOT_DETECTED` (no sighting newer than `max_age`);
+resolution, an undecodable frame, a frame OpenCV threw on; cleared by the next good frame);
+`NOT_DETECTED` (no sighting newer than `max_age`, or one in an image stamped more than `max_age`
+ahead of the node's clock — the two clocks disagree; less than that ahead answers `age` 0);
 `TRANSFORM_FAILED`; otherwise the landmark's pose, stamped with the image's capture time. With
 `target_frame` empty it is in the camera's own frame, untransformed
 (`<robot_id>/camera_optical_frame`: z ahead, x right, y down), which needs no TF and works in every
@@ -43,7 +47,8 @@ mode; any other frame is transformed at that stamp (`<robot_id>/base_link`: rela
 ## The ArUco plugin
 
 `syncai_landmark_detection/ArucoDetector`. Subscribes, only while active, to
-`image_raw/compressed` (SensorData QoS, decoded straight to grey) and `camera_info` (reliable +
+`image_raw/compressed` (SensorData QoS at depth 1, so a frame slower than the 30 Hz period drops
+the ones behind it rather than queueing them; decoded straight to grey) and `camera_info` (reliable +
 transient local: the feeder publishes it once, latched, so it is cached and never paired with an
 image by stamp). Every frame: the markers searched around where they were last seen (the whole
 frame when that misses), the outline picked, its corners undistorted with `camera_info`
@@ -55,8 +60,10 @@ The detection logic is SyncAI-Robot-Charger's `detector_node`, with its measured
 2 px window, `minMarkerDistanceRate` 0.01, the duplicate / white-line outline rule, the geometry
 check (|Rz| <= 60 deg, tilt <= 45 deg), the decisive image (3x + 0.3 px), the LM-refined pose
 below 0.6 m (out above 0.65 m) with two meeting refinements counted as decisive, the previous
-normal as the hint, the gate against mirror jumps (0.302 m / 20 deg, 5 in a row to relock, reset
-after 0.5 s). Its geometry and choice are ROS-free (`aruco_core`), covered by
+accepted normal as the hint, the gate against mirror jumps (0.302 m / 20 deg, 5 in a row to relock,
+reset after 0.5 s). Two changes of ours: the refinement is not tried while the IPPE pose is past
+0.70 m (it would be thrown away), and a pose the gate drops never becomes the hint (it did, and
+re-locked the gate onto the mirror). Its geometry and choice are ROS-free (`aruco_core`), covered by
 `test/test_marker_geometry.cpp` and `test/test_solution_selector.cpp`.
 
 Not ported, on purpose:

@@ -141,6 +141,20 @@ TEST(MarkerGeometry, UndistortsPlumbBobAndEquidistant)
   // All-zero coefficients: unchanged.
   aruco::CameraModel none{cameraK(), "plumb_bob", {0.0, 0.0, 0.0, 0.0, 0.0}, 1280, 720};
   EXPECT_EQ(aruco::undistortCorners(ideal, none), ideal);
+
+  // But an equidistant model with D = 0 is still a fisheye (r = f * theta):
+  // its projection is undistorted back to the pinhole one, not passed through.
+  aruco::CameraModel ideal_fisheye{cameraK(), "equidistant", {0.0, 0.0, 0.0, 0.0}, 1280, 720};
+  ASSERT_EQ(aruco::validateCameraModel(ideal_fisheye), "");
+  std::vector<cv::Point2f> fish_ideal;
+  cv::fisheye::projectPoints(
+    object, fish_ideal, rvec, pose.translation_m, cameraK(), cv::Vec4d(0.0, 0.0, 0.0, 0.0));
+  ASSERT_GT(cv::norm(fish_ideal[0] - ideal[0]), 1.0);  // the model does bend these corners
+  const auto unbent = aruco::undistortCorners(fish_ideal, ideal_fisheye);
+  for (std::size_t i = 0; i < ideal.size(); ++i) {
+    EXPECT_NEAR(unbent[i].x, ideal[i].x, 0.05);
+    EXPECT_NEAR(unbent[i].y, ideal[i].y, 0.05);
+  }
 }
 
 TEST(MarkerGeometry, RejectsUnusableCalibrations)

@@ -71,6 +71,8 @@ private:
 
   void onCameraInfo(const sensor_msgs::msg::CameraInfo::ConstSharedPtr & msg);
   void onImage(const sensor_msgs::msg::CompressedImage::ConstSharedPtr & msg);
+  /** @brief onImage's work; onImage only turns what it throws into frame_error_. */
+  void processImage(const sensor_msgs::msg::CompressedImage::ConstSharedPtr & msg);
   std::optional<cv::Rect> groupRoi(const Group & group, const cv::Size & frame) const;
   cv::Rect roiAround(const cv::Rect & box, const cv::Size & frame) const;
 

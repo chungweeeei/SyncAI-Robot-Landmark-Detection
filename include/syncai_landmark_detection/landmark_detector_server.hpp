@@ -3,6 +3,7 @@
 
 #include <map>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -60,13 +61,22 @@ private:
   double default_max_age_{0.3};
   double idle_timeout_{5.0};
 
-  // Plugin id -> plugin; landmark id -> plugin id. The plugins' activation
-  // state and last call are touched only from callback_group_ (the service
-  // and the standby timer), so they need no lock of their own.
-  std::map<std::string, LandmarkDetector::Ptr> detectors_;
+  // A loaded plugin and the server's state for it. active and last_call are
+  // touched only from callback_group_ (the service and the standby timer), so
+  // they need no lock of their own.
+  struct Detector
+  {
+    LandmarkDetector::Ptr plugin;
+    bool active{false};
+    // Set by every call; empty until the first. Optional, not a default
+    // rclcpp::Time: that one is system time, and subtracting it from the
+    // node's ROS time throws.
+    std::optional<rclcpp::Time> last_call;
+  };
+
+  // Plugin id -> plugin; landmark id -> plugin id.
+  std::map<std::string, Detector> detectors_;
   std::map<std::string, std::string> landmark_detector_;
-  std::map<std::string, bool> active_;
-  std::map<std::string, rclcpp::Time> last_call_;
 
   rclcpp::CallbackGroup::SharedPtr callback_group_;
   rclcpp::Service<DetectLandmark>::SharedPtr service_;

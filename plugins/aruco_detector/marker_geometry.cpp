@@ -87,9 +87,13 @@ std::string validateCameraModel(const CameraModel & model)
 std::vector<cv::Point2f> undistortCorners(
   const std::vector<cv::Point2f> & corners, const CameraModel & model)
 {
-  if (corners.empty() || std::all_of(model.d.begin(), model.d.end(), [](double c) {
-        return c == 0.0;
-      })) {
+  // All-zero coefficients make a pinhole model the identity, but not a
+  // fisheye: equidistant with D = 0 is still r = f * theta, and its corners
+  // fed to PnP as pinhole points give a pose wrong off-centre, with no error.
+  if (
+    corners.empty() ||
+    (model.distortion_model != "equidistant" &&
+     std::all_of(model.d.begin(), model.d.end(), [](double c) { return c == 0.0; }))) {
     return corners;
   }
   std::vector<cv::Point2f> out;

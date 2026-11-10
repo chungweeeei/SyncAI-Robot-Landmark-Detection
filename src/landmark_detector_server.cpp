@@ -1,6 +1,6 @@
 #include "syncai_landmark_detection/landmark_detector_server.hpp"
 
-#include <cstdio>
+#include <algorithm>
 #include <stdexcept>
 
 #include "syncai_landmark_detection/node_utils.hpp"
@@ -8,18 +8,6 @@
 
 namespace syncai_landmark_detection
 {
-
-namespace
-{
-
-std::string seconds(double s)
-{
-  char buffer[32];
-  std::snprintf(buffer, sizeof(buffer), "%.2f s", s);
-  return buffer;
-}
-
-}  // namespace
 
 LandmarkDetectorServer::LandmarkDetectorServer(const rclcpp::NodeOptions & options)
 : rclcpp::Node("landmark_detector", options),
@@ -75,8 +63,7 @@ void LandmarkDetectorServer::configure()
         get_logger(), "[LandmarkDetectorServer][%s] Created detector plugin %s of type %s",
         __func__, id.c_str(), type.c_str());
       detector->initialize(node, id, tf_);
-      detectors_.emplace(id, detector);
-      active_[id] = false;
+      detectors_.emplace(id, Detector{detector, false, std::nullopt});
     } catch (const pluginlib::PluginlibException & ex) {
       RCLCPP_FATAL(
         get_logger(), "[LandmarkDetectorServer][%s] Failed to create detector %s: %s", __func__,
@@ -107,7 +94,7 @@ void LandmarkDetectorServer::configure()
       exit(-1);
     }
     try {
-      it->second->addLandmark(landmark);
+      it->second.plugin->addLandmark(landmark);
     } catch (const std::exception & ex) {
       RCLCPP_FATAL(
         get_logger(), "[LandmarkDetectorServer][%s] Landmark %s refused by %s: %s", __func__,
@@ -164,14 +151,15 @@ void LandmarkDetectorServer::onDetect(
     return;
   }
   const std::string & detector_id = entry->second;
-  const auto & detector = detectors_.at(detector_id);
+  Detector & state = detectors_.at(detector_id);
+  const auto & detector = state.plugin;
   const rclcpp::Time now = this->now();
-  last_call_[detector_id] = now;
+  state.last_call = now;
 
   // A call is what wakes a detector: it then needs a frame or two first.
-  if (!active_[detector_id]) {
+  if (!state.active) {
     detector->activate();
-    active_[detector_id] = true;
+    state.active = true;
     response->error_code = Response::SENSOR_STARTING;
     response->error_msg = detector_id + " woken by this call; ask again";
     return;
@@ -196,13 +184,28 @@ void LandmarkDetectorServer::onDetect(
     response->error_msg = request->landmark_id + " not seen since " + detector_id + " woke";
     return;
   }
-  const double age = (now - rclcpp::Time(sighting->pose.header.stamp)).seconds();
+  double age = (now - rclcpp::Time(sighting->pose.header.stamp)).seconds();
   if (age > max_age) {
     response->error_code = Response::NOT_DETECTED;
-    response->error_msg = request->landmark_id + " last seen " + seconds(age) + " ago (max_age " +
-                          seconds(max_age) + ")";
+    response->error_msg = request->landmark_id + " last seen " + formatSeconds(age) +
+                          " ago (max_age " + formatSeconds(max_age) + ")";
     return;
   }
+  // A stamp ahead of the node's clock: the feeder stamps from another clock,
+  // or this one stepped back after the frame. Unbounded, a negative age passes
+  // every max_age, and a sighting from before a clock step would be answered
+  // as current until the plugin's frame_timeout -- or for good, while frames
+  // without the marker keep arriving. Ahead by more than max_age, how old the
+  // sighting is cannot be told: refused. Within it, it is as fresh as can be
+  // said, age 0 (the srv's age is seconds since the stamp, never negative).
+  if (age < -max_age) {
+    response->error_code = Response::NOT_DETECTED;
+    response->error_msg = request->landmark_id + " seen in an image stamped " +
+                          formatSeconds(-age) + " ahead of this node's clock (max_age " +
+                          formatSeconds(max_age) + "): the camera's and the node's clocks disagree";
+    return;
+  }
+  age = std::max(age, 0.0);
 
   // No target_frame: the sensor's own frame, as seen (2026-11-10: needs no TF,
   // so it answers in every mode; a docking target's fixed frame is the
@@ -231,14 +234,13 @@ void LandmarkDetectorServer::onDetect(
 void LandmarkDetectorServer::onStandbyTimer()
 {
   const rclcpp::Time now = this->now();
-  for (auto & [id, active] : active_) {
-    if (!active) {
+  for (auto & [id, detector] : detectors_) {
+    if (!detector.active) {
       continue;
     }
-    const auto last = last_call_.find(id);
-    if (last == last_call_.end() || (now - last->second).seconds() > idle_timeout_) {
-      detectors_.at(id)->deactivate();
-      active = false;
+    if (!detector.last_call || (now - *detector.last_call).seconds() > idle_timeout_) {
+      detector.plugin->deactivate();
+      detector.active = false;
       RCLCPP_INFO(
         get_logger(), "[LandmarkDetectorServer][%s] %s: no call for %.1f s, standby", __func__,
         id.c_str(), idle_timeout_);

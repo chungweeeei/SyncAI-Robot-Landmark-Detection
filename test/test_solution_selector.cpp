@@ -104,9 +104,32 @@ TEST(SolutionSelector, FarFromTheMarkerTheIppePoseStands)
 {
   aruco::SolutionSelector s;  // refine_lm on
   const auto a = markerAt(0.0, 1.0, 0.05, 0.2);
-  const auto out = s.select(0.0, {a}, [&](const aruco::MarkerPose &) { return a; });
+  int refinements = 0;
+  const auto out = s.select(0.0, {a}, [&](const aruco::MarkerPose &) {
+    ++refinements;
+    return a;
+  });
   ASSERT_TRUE(out);
   EXPECT_FALSE(out->refined);
+  // 1.0 m is well past refine_exit_x_m (0.65): not even tried.
+  EXPECT_EQ(refinements, 0);
+}
+
+TEST(SolutionSelector, JustOutsideTheZoneTheRefinementIsStillTried)
+{
+  aruco::SolutionSelector s;  // refine_lm on
+  // IPPE at 0.68 m, inside the skip margin; the refined pose is at 0.55 m and
+  // enters the zone (below refine_max_x_m 0.6).
+  const auto a = markerAt(0.0, 0.68, 0.05, 0.2);
+  const auto refined = markerAt(0.0, 0.55, 0.05, 0.2);
+  int refinements = 0;
+  const auto out = s.select(0.0, {a}, [&](const aruco::MarkerPose &) {
+    ++refinements;
+    return refined;
+  });
+  ASSERT_TRUE(out);
+  EXPECT_GE(refinements, 1);
+  EXPECT_TRUE(out->refined);
 }
 
 TEST(SolutionSelector, TheGateDropsAMirrorJumpUntilItPersists)
@@ -122,6 +145,31 @@ TEST(SolutionSelector, TheGateDropsAMirrorJumpUntilItPersists)
   EXPECT_FALSE(s.select(0.033 * 5, {jumped}, kIdentity)->gated);
   // And it is the new reference.
   EXPECT_FALSE(s.select(0.033 * 6, {jumped}, kIdentity)->gated);
+}
+
+TEST(SolutionSelector, AGatedMirrorDoesNotBecomeTheHint)
+{
+  aruco::SolutionSelector s(noRefine());
+  const double yaw = 15.0 * CV_PI / 180.0;  // the two sides 30 deg apart: beyond gate_rz (20)
+  const auto a = markerAt(0.0, 1.0, yaw, 0.2);
+  const auto mirror = markerAt(0.0, 1.0, -yaw, 0.2);
+  ASSERT_FALSE(s.select(0.0, {a}, kIdentity)->gated);
+  // One frame decisively for the mirror: dropped by the gate.
+  auto a_bad = a;
+  a_bad.reprojection_error_px = 1.0;  // 1.0 >= 3 x 0.2 + 0.3
+  auto out = s.select(0.033, {mirror, a_bad}, kIdentity);
+  ASSERT_TRUE(out);
+  EXPECT_EQ(out->choice, aruco::Choice::Decisive);
+  EXPECT_TRUE(out->gated);
+  // The next frame is undecided, the mirror listed first: the hint is still
+  // the accepted side, so a is picked and passes.
+  auto mirror_low = mirror;
+  mirror_low.reprojection_error_px = 0.18;
+  out = s.select(0.066, {mirror_low, a}, kIdentity);
+  ASSERT_TRUE(out);
+  EXPECT_EQ(out->choice, aruco::Choice::Hint);
+  EXPECT_FALSE(out->gated);
+  EXPECT_NEAR(aruco::observeFromMarker(out->pose).rz_rad, yaw, 1e-9);
 }
 
 TEST(SolutionSelector, TheGateStartsOverAfterAGap)

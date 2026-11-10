@@ -10,6 +10,12 @@ namespace aruco
 namespace
 {
 
+// How far past refine_exit_x_m the IPPE pose may be and still be refined. The
+// refinement settles the rotation, the part two solutions disagree on; the
+// distance it hardly moves, so 5 cm is room, not a measured bound. Too small
+// would only skip a refinement that could have entered the zone.
+constexpr double kRefineSkipMargin_m = 0.05;
+
 double wrap(double a)
 {
   return std::atan2(std::sin(a), std::cos(a));
@@ -68,7 +74,14 @@ std::optional<Selection> SolutionSelector::select(
 
   // 3 Near the marker: the LM-refined pose, and two refined solutions that
   // meet are one pose -- the ambiguity is gone.
-  if (params_.refine_lm) {
+  if (
+    params_.refine_lm &&
+    observeFromMarker(out.pose).x_m > params_.refine_exit_x_m + kRefineSkipMargin_m) {
+    // Clearly outside the zone on the IPPE pose already: the refined one
+    // would be too, and decideRefined() would throw both refinements away.
+    // That is most of an approach, two solvePnPRefineLM a frame for nothing.
+    refine_zone_ = false;
+  } else if (params_.refine_lm) {
     const MarkerPose refined = refine_fn(out.pose);
     std::optional<MarkerPose> refined_alt;
     if (alternative) {
@@ -82,11 +95,17 @@ std::optional<Selection> SolutionSelector::select(
     refine_zone_ = false;
   }
 
-  last_normal_ = markerNormal(out.pose);
-  last_normal_t_ = t_sec;
-
   // 4 The gate against mirror jumps.
   out.gated = !gate(observeFromMarker(out.pose), t_sec);
+
+  // The hint follows accepted poses only. Taken before the gate, a dropped
+  // mirror became the hint: the next undecided frames chose the mirror by it,
+  // were dropped too, and after gate_relock of them the gate re-locked onto
+  // the mirror branch as if the robot had moved.
+  if (!out.gated) {
+    last_normal_ = markerNormal(out.pose);
+    last_normal_t_ = t_sec;
+  }
   return out;
 }
 

@@ -4,7 +4,6 @@
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>
-#include <cstdio>
 #include <limits>
 #include <stdexcept>
 #include <utility>
@@ -65,13 +64,6 @@ void detectIn(
       c += offset;
     }
   }
-}
-
-std::string seconds(double s)
-{
-  char buffer[32];
-  std::snprintf(buffer, sizeof(buffer), "%.1f s", s);
-  return buffer;
 }
 
 }  // namespace
@@ -206,6 +198,24 @@ void ArucoDetector::addLandmark(const std::string & landmark_id)
   }
 
   std::lock_guard<std::mutex> lock(mutex_);
+  // Same dictionary and id is the same marker whatever the polarity: the
+  // inverted group's detectMarkers decodes normal prints too (cv::aruco tries
+  // a candidate as printed first, then inverted), so one normal print would be
+  // reported as both landmarks. Checked across both groups of the dictionary,
+  // not only within the one this landmark joins.
+  for (const char * polarity : {"", "/inverted"}) {
+    const auto other_group = groups_.find(dictionary_name + polarity);
+    if (other_group == groups_.end()) {
+      continue;
+    }
+    for (const auto & other : other_group->second.landmarks) {
+      if (landmarks_.at(other).marker_id == marker_id) {
+        throw std::invalid_argument(
+          landmark_id + " and " + other + " are the same marker (" + dictionary_name + " id " +
+          std::to_string(marker_id) + "): one sighting cannot be told apart");
+      }
+    }
+  }
   const std::string key = dictionary_name + (inverted ? "/inverted" : "");
   auto group = groups_.find(key);
   if (group == groups_.end()) {
@@ -223,13 +233,6 @@ void ArucoDetector::addLandmark(const std::string & landmark_id)
     g.parameters->minMarkerDistanceRate = 0.01;
     g.parameters->detectInvertedMarker = inverted;
     group = groups_.emplace(key, std::move(g)).first;
-  }
-  for (const auto & other : group->second.landmarks) {
-    if (landmarks_.at(other).marker_id == marker_id) {
-      throw std::invalid_argument(
-        landmark_id + " and " + other + " are the same marker (" + key + " id " +
-        std::to_string(marker_id) + "): one sighting cannot be told apart");
-    }
   }
   group->second.landmarks.push_back(landmark_id);
   Landmark landmark;
@@ -276,8 +279,13 @@ void ArucoDetector::activate()
     camera_info_topic_, rclcpp::QoS(1).reliable().transient_local(),
     [this](const sensor_msgs::msg::CameraInfo::ConstSharedPtr msg) { onCameraInfo(msg); }, options);
   // The feeder publishes best effort; a reliable subscription would not match.
+  // Depth 1, not SensorDataQoS's 5: a frame that takes longer than the 30 Hz
+  // period (a whole-frame search on the Jetson) would otherwise leave a queue
+  // of older frames, each sighting built from one several periods late -- past
+  // max_age with the marker in view, or a pose lagging the robot. Only the
+  // newest frame is worth searching.
   image_sub_ = node->create_subscription<sensor_msgs::msg::CompressedImage>(
-    image_topic_, rclcpp::SensorDataQoS(),
+    image_topic_, rclcpp::SensorDataQoS().keep_last(1),
     [this](const sensor_msgs::msg::CompressedImage::ConstSharedPtr msg) { onImage(msg); }, options);
   RCLCPP_INFO(
     logger_, "[ArucoDetector][%s] %s: reading %s", __func__, name_.c_str(), image_topic_.c_str());
@@ -325,14 +333,14 @@ SensorStatus ArucoDetector::sensorStatus() const
       status.reason = "waiting for the first frame on " + image_topic_;
     } else {
       status.state = SensorStatus::State::UNAVAILABLE;
-      status.reason = "no frame on " + image_topic_ + " for " + seconds(since_activate);
+      status.reason = "no frame on " + image_topic_ + " for " + formatSeconds(since_activate);
     }
     return status;
   }
   const double since_frame = (now - *last_frame_at_).seconds();
   if (since_frame > frame_timeout_) {
     status.state = SensorStatus::State::UNAVAILABLE;
-    status.reason = "no frame on " + image_topic_ + " for " + seconds(since_frame);
+    status.reason = "no frame on " + image_topic_ + " for " + formatSeconds(since_frame);
     return status;
   }
   if (!frame_error_.empty()) {
@@ -383,18 +391,53 @@ void ArucoDetector::onCameraInfo(const sensor_msgs::msg::CameraInfo::ConstShared
 
 void ArucoDetector::onImage(const sensor_msgs::msg::CompressedImage::ConstSharedPtr & msg)
 {
+  // An exception out of a callback ends the whole node, mid-dock, and the
+  // launch does not respawn it. A frame OpenCV throws on (cv::Exception from
+  // the decode, the search, the undistortion or PnP) is one bad frame: say so
+  // through sensorStatus() until a good one clears it. The landmarks keep
+  // their state from before it: processImage() commits only a finished frame.
+  try {
+    processImage(msg);
+  } catch (const std::exception & e) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    frame_error_ = "a frame on " + image_topic_ + " failed: " + e.what();
+    RCLCPP_ERROR_THROTTLE(
+      logger_, *clock_, 5000, "[ArucoDetector][%s] %s: %s", __func__, name_.c_str(),
+      frame_error_.c_str());
+  }
+}
+
+void ArucoDetector::processImage(const sensor_msgs::msg::CompressedImage::ConstSharedPtr & msg)
+{
   const rclcpp::Time arrived = clock_->now();
   // Straight to grey: cv::aruco works on grey anyway, and the colour planes
-  // are never decoded.
-  const cv::Mat gray = cv::imdecode(msg->data, cv::IMREAD_GRAYSCALE);
+  // are never decoded. An empty buffer is a frame that does not decode, not a
+  // call: imdecode asserts on one.
+  const cv::Mat gray =
+    msg->data.empty() ? cv::Mat() : cv::imdecode(msg->data, cv::IMREAD_GRAYSCALE);
 
-  // Copy what the search needs, then search unlocked: detectMarkers is the
-  // expensive part and the server's answer must not wait behind it.
+  // Copy what a frame needs, work on the copies unlocked, then commit them:
+  // the search and PnP (with up to two LM refinements per landmark) are the
+  // expensive part, and latest() / sensorStatus() -- the server's answer --
+  // must not wait behind them. Only this callback group's one callback at a
+  // time writes a landmark's state, so nothing else changes it between the
+  // copy and the commit except activate() / deactivate(), which the
+  // generation and active_ checks at the commit catch.
+  struct LandmarkWork
+  {
+    const std::string * id;
+    int marker_id;
+    double marker_size_m;
+    aruco::SolutionSelector selector;
+    uint16_t consecutive;
+    std::optional<cv::Rect> box;
+    std::optional<Sighting> sighting;  // set only when this frame gives one
+  };
   struct Work
   {
     const Group * group;
-    std::vector<int> marker_ids;
     std::optional<cv::Rect> roi;
+    std::vector<LandmarkWork> landmarks;
   };
   std::vector<Work> work;
   aruco::CameraModel model;
@@ -426,53 +469,46 @@ void ArucoDetector::onImage(const sensor_msgs::msg::CompressedImage::ConstShared
     generation = generation_;
     for (const auto & [key, group] : groups_) {
       (void)key;
-      Work w{&group, {}, groupRoi(group, gray.size())};
+      Work w{&group, groupRoi(group, gray.size()), {}};
       for (const auto & id : group.landmarks) {
-        w.marker_ids.push_back(landmarks_.at(id).marker_id);
+        const Landmark & landmark = landmarks_.at(id);
+        w.landmarks.push_back(
+          {&id, landmark.marker_id, landmark.marker_size_m, landmark.selector, landmark.consecutive,
+           landmark.last_box, std::nullopt});
       }
       work.push_back(std::move(w));
     }
   }
 
   const cv::Rect whole(cv::Point(0, 0), gray.size());
-  std::vector<std::vector<std::vector<cv::Point2f>>> group_corners(work.size());
-  std::vector<std::vector<int>> group_ids(work.size());
-  for (std::size_t g = 0; g < work.size(); ++g) {
-    const auto & w = work[g];
+  const double t_sec = rclcpp::Time(msg->header.stamp).seconds();
+  for (auto & w : work) {
+    std::vector<std::vector<cv::Point2f>> group_corners;
+    std::vector<int> group_ids;
     bool all_found = false;
     if (w.roi) {
-      detectIn(
-        gray, *w.roi, w.group->dictionary, w.group->parameters, group_corners[g], group_ids[g]);
-      all_found = std::all_of(w.marker_ids.begin(), w.marker_ids.end(), [&](int id) {
-        return aruco::pickMarker(group_ids[g], group_corners[g], id) >= 0;
+      detectIn(gray, *w.roi, w.group->dictionary, w.group->parameters, group_corners, group_ids);
+      all_found = std::all_of(w.landmarks.begin(), w.landmarks.end(), [&](const LandmarkWork & l) {
+        return aruco::pickMarker(group_ids, group_corners, l.marker_id) >= 0;
       });
     }
     if (!all_found) {
-      detectIn(
-        gray, whole, w.group->dictionary, w.group->parameters, group_corners[g], group_ids[g]);
+      detectIn(gray, whole, w.group->dictionary, w.group->parameters, group_corners, group_ids);
     }
-  }
 
-  const double t_sec = rclcpp::Time(msg->header.stamp).seconds();
-  std::lock_guard<std::mutex> lock(mutex_);
-  if (!active_ || generation != generation_) {
-    return;  // deactivated, or re-activated for possibly another dock, meanwhile
-  }
-  for (std::size_t g = 0; g < work.size(); ++g) {
-    for (const auto & landmark_id : work[g].group->landmarks) {
-      Landmark & landmark = landmarks_.at(landmark_id);
-      const int index = aruco::pickMarker(group_ids[g], group_corners[g], landmark.marker_id);
+    for (auto & landmark : w.landmarks) {
+      const int index = aruco::pickMarker(group_ids, group_corners, landmark.marker_id);
       if (index < 0) {
-        landmark.last_box.reset();
+        landmark.box.reset();
         landmark.consecutive = 0;
         landmark.selector.miss(t_sec);
         continue;
       }
-      const auto & found = group_corners[g][static_cast<std::size_t>(index)];
-      landmark.last_box = cv::boundingRect(found);
+      const auto & found = group_corners[static_cast<std::size_t>(index)];
+      landmark.box = cv::boundingRect(found);
       const auto corners = aruco::undistortCorners(found, model);
-      const auto candidates = aruco::estimateCandidates(corners, landmark.marker_size_m, model.k);
       const double size = landmark.marker_size_m;
+      const auto candidates = aruco::estimateCandidates(corners, size, model.k);
       const auto selection = landmark.selector.select(
         t_sec, candidates,
         [&](const aruco::MarkerPose & p) { return aruco::refine(p, corners, size, model.k); });
@@ -503,7 +539,23 @@ void ArucoDetector::onImage(const sensor_msgs::msg::CompressedImage::ConstShared
       sighting.consecutive = landmark.consecutive;
       sighting.ambiguous = selection->ambiguous;
       sighting.reprojection_error_px = selection->pose.reprojection_error_px;
-      landmark.latest = sighting;
+      landmark.sighting = std::move(sighting);
+    }
+  }
+
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (!active_ || generation != generation_) {
+    return;  // deactivated, or re-activated for possibly another dock, meanwhile
+  }
+  for (auto & w : work) {
+    for (auto & l : w.landmarks) {
+      Landmark & landmark = landmarks_.at(*l.id);
+      landmark.selector = std::move(l.selector);
+      landmark.consecutive = l.consecutive;
+      landmark.last_box = l.box;
+      if (l.sighting) {
+        landmark.latest = std::move(l.sighting);
+      }
     }
   }
 }
