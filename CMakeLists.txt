@@ -28,11 +28,13 @@ find_package(syncai_common REQUIRED)
 # aruco is the contrib module (libopencv-contrib-dev); calib3d for solvePnP
 # and the fisheye model.
 find_package(OpenCV REQUIRED COMPONENTS core imgproc imgcodecs calib3d aruco)
+find_package(tf2 REQUIRED)
 
 set(dependencies
   rclcpp
   geometry_msgs
   sensor_msgs
+  tf2
   tf2_ros
   tf2_geometry_msgs
   pluginlib
@@ -41,8 +43,53 @@ set(dependencies
 
 # The plugin interface (landmark_detector.hpp) is header-only, as
 # syncai_nav_core's is: installed below and exported, so a detector plugin in
-# another package can build against it. The server and the ArUco plugin are
-# added here as they are written.
+# another package can build against it.
+
+# ---- The ArUco plugin -------------------------------------------------------
+# Its geometry and solution choice are ROS-free (OpenCV only), so the gtests
+# link them without a node, as syncai_global_planner's Octo3D core is.
+add_library(aruco_core STATIC
+  plugins/aruco_detector/marker_geometry.cpp
+  plugins/aruco_detector/solution_selector.cpp
+)
+target_include_directories(aruco_core PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(aruco_core PUBLIC ${OpenCV_LIBS})
+# Linked into a shared plugin library.
+set_target_properties(aruco_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
+# The plugin itself, loaded by pluginlib (landmark_detector_plugin.xml names
+# this library).
+add_library(${PROJECT_NAME}_aruco SHARED plugins/aruco_detector/aruco_detector.cpp)
+target_include_directories(${PROJECT_NAME}_aruco PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+ament_target_dependencies(${PROJECT_NAME}_aruco ${dependencies})
+target_link_libraries(${PROJECT_NAME}_aruco aruco_core)
+
+pluginlib_export_plugin_description_file(${PROJECT_NAME} landmark_detector_plugin.xml)
+
+# ---- The server: landmark_detector -----------------------------------------
+# Loads the plugins through pluginlib only; it links none of them.
+add_executable(landmark_detector
+  src/main.cpp
+  src/landmark_detector_server.cpp
+)
+target_include_directories(landmark_detector PRIVATE
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+ament_target_dependencies(landmark_detector ${dependencies})
+
+install(TARGETS ${PROJECT_NAME}_aruco
+  ARCHIVE DESTINATION lib
+  LIBRARY DESTINATION lib
+  RUNTIME DESTINATION bin
+)
+
+install(TARGETS landmark_detector
+  DESTINATION lib/${PROJECT_NAME}
+)
 
 install(DIRECTORY launch params
   DESTINATION share/${PROJECT_NAME}
@@ -61,6 +108,12 @@ if(BUILD_TESTING)
   # .clang-format (checked in CI) and uncrustify's ROS style contradict each other.
   set(ament_cmake_uncrustify_FOUND TRUE)
   ament_lint_auto_find_test_dependencies()
+
+  find_package(ament_cmake_gtest REQUIRED)
+  ament_add_gtest(test_marker_geometry test/test_marker_geometry.cpp)
+  target_link_libraries(test_marker_geometry aruco_core)
+  ament_add_gtest(test_solution_selector test/test_solution_selector.cpp)
+  target_link_libraries(test_solution_selector aruco_core)
 endif()
 
 ament_export_include_directories(include)

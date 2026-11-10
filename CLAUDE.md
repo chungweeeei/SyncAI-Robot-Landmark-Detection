@@ -2,8 +2,10 @@
 
 The ROS 2 package `syncai_landmark_detection` (C++17, `rclcpp`): landmark detection for the last
 metre of a charge. One node, `landmark_detector`, serving `syncai_common/srv/DetectLandmark`.
-Set up on 2026-11-09; so far the plugin interface only. The server (registry, service, standby,
-transform) and the ArUco plugin come next.
+Set up on 2026-11-09. The server (`src/`, the registry, the service, standby, the transform) and the
+ArUco plugin (`plugins/aruco_detector/`, ported from SyncAI-Robot-Charger) followed on 2026-11-10;
+README "The ArUco plugin" lists what of the charger's detector was ported and what was not, and
+why. Not yet run on the robot.
 
 **The detector only detects.** It returns where a landmark is (6-DOF, in `target_frame`, transformed
 at the image stamp) and facts about the sighting (`age`, `consecutive`, `ambiguous`,
@@ -56,6 +58,9 @@ docker exec syncai-robot-landmark-detection bash -lc 'cd /workspace && colcon bu
 docker exec syncai-robot-landmark-detection bash -lc 'cd /workspace && colcon test --packages-select syncai_landmark_detection && colcon test-result --test-result-base build/syncai_landmark_detection --verbose'
 ```
 
+- An OpenCV 4.5.4 trap for tests: with a marker centre exactly on the camera's horizontal axis and
+  noise-free corners, `SOLVEPNP_IPPE_SQUARE` returns two wrong solutions (~43 px off). Synthetic
+  markers in tests sit off that axis (`test_marker_geometry.cpp`, `markerAt`).
 - If `syncai_common` is missing (a fresh volume):
   `cd /workspace && vcs import --skip-existing < src/syncai_landmark_detection/dependencies.repos`.
 - CI (`.github/workflows/ci.yml`) runs a clang-format 14 check on an ubuntu-22.04 runner and
