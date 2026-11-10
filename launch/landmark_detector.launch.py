@@ -4,9 +4,10 @@
 # robot_id is read from the system config INI at launch time, the convention
 # of every launch file in SyncAI-Robot-Workspace (whose read_robot_id() this
 # copies: a launch file in one package does not import another's), and is
-# used as the node namespace -- so the feeder's image_raw/compressed and
-# camera_info resolve under it -- and to prefix odom_frame, since TF frame
-# names are not namespaced by ROS.
+# used as the node namespace, so the feeder's image_raw/compressed and
+# camera_info resolve under it. No frame is set here: a pose comes back in the
+# camera's frame (the feeder's frame_id, already <robot_id>/...) unless the
+# caller names a target_frame.
 #
 # use_sim_time comes only from the params file: a launch override placed
 # after it would silently win over the YAML value.
@@ -60,10 +61,7 @@ def launch_setup(context, *args, **kwargs):
         executable="landmark_detector",
         namespace=robot_id,
         output="screen",
-        parameters=[
-            LaunchConfiguration("params_file"),
-            {"odom_frame": f"{robot_id}/odom"},
-        ],
+        parameters=[LaunchConfiguration("params_file")],
     )
     return [node]
 

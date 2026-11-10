@@ -29,10 +29,6 @@ LandmarkDetectorServer::LandmarkDetectorServer(const rclcpp::NodeOptions & optio
 {
   RCLCPP_INFO(get_logger(), "[LandmarkDetectorServer][%s] Creating", __func__);
 
-  // The frame a pose goes to when the caller names none: odom, because it is
-  // continuous and map jumps on a localizer correction. The launch file makes
-  // it <robot_id>/odom.
-  declare_parameter("odom_frame", std::string("odom"));
   // DetectLandmark's max_age when the caller gives <= 0.
   declare_parameter("default_max_age", 0.3);
   // A detector nobody has asked for this long goes back to standby (stops
@@ -65,7 +61,6 @@ void LandmarkDetectorServer::configure()
   RCLCPP_INFO(get_logger(), "[LandmarkDetectorServer][%s] Configuring", __func__);
   auto node = shared_from_this();
 
-  odom_frame_ = get_parameter("odom_frame").as_string();
   default_max_age_ = get_parameter("default_max_age").as_double();
   idle_timeout_ = get_parameter("idle_timeout").as_double();
 
@@ -145,8 +140,8 @@ void LandmarkDetectorServer::configure()
   RCLCPP_INFO(
     get_logger(),
     "[LandmarkDetectorServer][%s] Ready: %zu detector(s), %zu landmark(s), "
-    "odom_frame %s, idle_timeout %.1f s",
-    __func__, detectors_.size(), landmark_detector_.size(), odom_frame_.c_str(), idle_timeout_);
+    "idle_timeout %.1f s",
+    __func__, detectors_.size(), landmark_detector_.size(), idle_timeout_);
 }
 
 void LandmarkDetectorServer::onDetect(
@@ -209,15 +204,22 @@ void LandmarkDetectorServer::onDetect(
     return;
   }
 
-  // At the capture stamp: the robot has moved since the frame was taken.
-  const std::string target = request->target_frame.empty() ? odom_frame_ : request->target_frame;
-  try {
-    response->pose = tf_->transform(sighting->pose, target, tf2::durationFromSec(0.1));
-  } catch (const tf2::TransformException & ex) {
-    response->error_code = Response::TRANSFORM_FAILED;
-    response->error_msg =
-      sighting->pose.header.frame_id + " -> " + target + " at the image " + "stamp: " + ex.what();
-    return;
+  // No target_frame: the sensor's own frame, as seen (2026-11-10: needs no TF,
+  // so it answers in every mode; a docking target's fixed frame is the
+  // consumer's to choose). Any other: at the capture stamp, since the robot
+  // has moved since the frame was taken.
+  if (request->target_frame.empty()) {
+    response->pose = sighting->pose;
+  } else {
+    try {
+      response->pose =
+        tf_->transform(sighting->pose, request->target_frame, tf2::durationFromSec(0.1));
+    } catch (const tf2::TransformException & ex) {
+      response->error_code = Response::TRANSFORM_FAILED;
+      response->error_msg = sighting->pose.header.frame_id + " -> " + request->target_frame +
+                            " at the image stamp: " + ex.what();
+      return;
+    }
   }
   response->error_code = Response::NONE;
   response->age = static_cast<float>(age);

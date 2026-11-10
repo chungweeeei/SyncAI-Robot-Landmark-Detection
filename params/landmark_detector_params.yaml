@@ -1,14 +1,10 @@
 # landmark_detector (syncai_landmark_detection): the detector plugins and the
-# landmark registry. Loaded by launch/landmark_detector.launch.py, which sets
-# odom_frame to <robot_id>/odom (TF frames are not namespaced by ROS).
+# landmark registry. Loaded by launch/landmark_detector.launch.py.
 #
 # /**/<node> so the file works under any robot_id namespace.
 /**/landmark_detector:
   ros__parameters:
     use_sim_time: false
-    # The frame a pose goes to when DetectLandmark names none (overridden by
-    # the launch file).
-    odom_frame: odom
     # DetectLandmark's max_age when the caller gives <= 0 [s].
     default_max_age: 0.3
     # A detector nobody has called this long stops reading its sensor [s].

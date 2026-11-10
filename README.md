@@ -27,16 +27,18 @@ ros2 service call /<robot_id>/detect_landmark syncai_common/srv/DetectLandmark "
 The first call wakes the detector and answers `SENSOR_STARTING` (3); ask again. A detector nobody
 calls for `idle_timeout` (5 s) stops reading its sensor. The launch file takes `robot_id` from
 `config/system.ini` as the namespace, so the plugin reads `syncai_camera_feeder`'s
-`<robot_id>/image_raw/compressed` and `<robot_id>/camera_info`, and makes `odom_frame`
-`<robot_id>/odom`. `params/landmark_detector_params.yaml` holds the plugins and the landmark registry
+`<robot_id>/image_raw/compressed` and `<robot_id>/camera_info`. `params/landmark_detector_params.yaml` holds the plugins and the landmark registry
 (`landmarks`, one entry per print, each naming its `detector`).
 
 What the server answers: `UNKNOWN_LANDMARK` (not in the registry); `SENSOR_STARTING` (just woken,
 or no frame / `camera_info` yet); `SENSOR_UNAVAILABLE` (no frame for `frame_timeout`, no
 `camera_info` — the feeder publishes none without its calibration file — a calibration for another
 resolution, an undecodable frame); `NOT_DETECTED` (no sighting newer than `max_age`);
-`TRANSFORM_FAILED`; otherwise the landmark's pose in `target_frame` (empty: odom) at the image's
-capture stamp.
+`TRANSFORM_FAILED`; otherwise the landmark's pose, stamped with the image's capture time. With
+`target_frame` empty it is in the camera's own frame, untransformed
+(`<robot_id>/camera_optical_frame`: z ahead, x right, y down), which needs no TF and works in every
+mode; any other frame is transformed at that stamp (`<robot_id>/base_link`: relative to the robot;
+`<robot_id>/odom`: fixed, AUTO only).
 
 ## The ArUco plugin
 

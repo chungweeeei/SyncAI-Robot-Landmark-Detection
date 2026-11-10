@@ -29,7 +29,8 @@ namespace syncai_landmark_detection
  * What the server does and the plugins do not: the registry lookup, waking a
  * plugin on a call and putting it back to standby after idle_timeout, the
  * max_age judgement, and the transform of the plugin's sighting (sensor frame,
- * capture stamp) into the caller's target_frame at that stamp.
+ * capture stamp) into the caller's target_frame at that stamp -- or none,
+ * when the caller names no frame.
  */
 class LandmarkDetectorServer : public rclcpp::Node
 {
@@ -56,7 +57,6 @@ private:
   std::shared_ptr<tf2_ros::Buffer> tf_;
   std::shared_ptr<tf2_ros::TransformListener> tf_listener_;
 
-  std::string odom_frame_;
   double default_max_age_{0.3};
   double idle_timeout_{5.0};
 
