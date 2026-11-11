@@ -141,6 +141,23 @@ public:
    * its stamp is that of the newest input it includes.
    */
   virtual std::optional<Sighting> latest(const std::string & landmark_id) const = 0;
+
+  /**
+   * @brief Why the newest input gave no sighting of landmark_id, for the
+   * server's NOT_DETECTED error_msg and its log: "marker id 42 not found in
+   * the frame; exposure searching at 4200 us". Empty when it gave one, or
+   * when the plugin has nothing to add. Thread-safe and non-blocking.
+   *
+   * Not pure: NOT_DETECTED alone ("not seen since the detector woke") is a
+   * complete answer, and this only says which of a method's own reasons it
+   * was -- on robot01, 2026-11-11, a burnt-out marker and a marker out of
+   * view read the same in the log.
+   */
+  virtual std::string missReason(const std::string & landmark_id) const
+  {
+    (void)landmark_id;
+    return {};
+  }
 };
 
 }  // namespace syncai_landmark_detection

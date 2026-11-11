@@ -14,6 +14,9 @@
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
+#include "syncai_landmark_detection/camera_exposure/exposure_policy.hpp"
+#include "syncai_landmark_detection/camera_exposure/feeder_exposure_client.hpp"
+#include "syncai_landmark_detection/camera_exposure/region_brightness.hpp"
 #include "syncai_landmark_detection/landmark_detector.hpp"
 #include "syncai_landmark_detection/plugins/aruco_detector/marker_geometry.hpp"
 #include "syncai_landmark_detection/plugins/aruco_detector/solution_selector.hpp"
@@ -33,6 +36,14 @@ namespace syncai_landmark_detection
  * undistorted with camera_info, both PnP solutions, the choice and the gate
  * (aruco::SolutionSelector), and the result kept as a Sighting in the
  * camera's frame at the image's capture stamp.
+ *
+ * While active it also sets the camera's exposure, through the feeder
+ * (`exposure.*`, camera_exposure/): auto exposure meters the whole frame and
+ * burns the marker out, and the detector is who knows where the marker is.
+ * It steps through a ladder of exposures until the marker reads, steers its
+ * region to a target brightness, then holds that exposure for the approach;
+ * deactivate() gives the camera back. A feeder that is not there, or does
+ * not answer, costs the adjustment and never a detection.
  */
 class ArucoDetector : public LandmarkDetector
 {
@@ -48,6 +59,7 @@ public:
   void deactivate() override;
   SensorStatus sensorStatus() const override;
   std::optional<Sighting> latest(const std::string & landmark_id) const override;
+  std::string missReason(const std::string & landmark_id) const override;
 
 private:
   struct Landmark
@@ -58,6 +70,8 @@ private:
     std::optional<cv::Rect> last_box;  // the marker's bounding box in the last frame
     std::optional<Sighting> latest;
     uint16_t consecutive{0};
+    // Why the last frame gave no sighting; empty when it gave one.
+    std::string miss;
   };
 
   // Landmarks sharing a dictionary and polarity are found by one
@@ -75,6 +89,10 @@ private:
   void processImage(const sensor_msgs::msg::CompressedImage::ConstSharedPtr & msg);
   std::optional<cv::Rect> groupRoi(const Group & group, const cv::Size & frame) const;
   cv::Rect roiAround(const cv::Rect & box, const cv::Size & frame) const;
+  /** @brief One frame's word to the exposure policy, and what it decides. Caller holds mutex_. */
+  void stepExposure(const std::optional<camera_exposure::RegionBrightness> & region);
+  /** @brief What the exposure control is doing, for missReason(). Caller holds mutex_. */
+  std::string exposureStatus() const;
 
   rclcpp::Node::WeakPtr node_;
   rclcpp::Logger logger_{rclcpp::get_logger("ArucoDetector")};
@@ -91,6 +109,10 @@ private:
   double roi_margin_{0.75};
   int roi_min_size_px_{160};
   aruco::SelectorParams selector_params_;
+  camera_exposure::RegionParams region_params_;
+  // Null with exposure.enabled false. Its own lock; called under mutex_, so
+  // a write and deactivate()'s release cannot swap places.
+  std::unique_ptr<camera_exposure::FeederExposureClient> exposure_client_;
 
   mutable std::mutex mutex_;  // everything below
   std::map<std::string, Landmark> landmarks_;
@@ -106,6 +128,10 @@ private:
   std::string camera_model_error_;             // why camera_info cannot be used; empty when it can
   std::optional<rclcpp::Time> last_frame_at_;  // node clock, on arrival
   std::string frame_error_;  // why the last frame could not be used; empty when it could
+  camera_exposure::ExposurePolicy exposure_policy_;
+  // This activation writes the exposure: the feeder answered at activate()
+  // and has kept answering.
+  bool exposure_running_{false};
 };
 
 }  // namespace syncai_landmark_detection

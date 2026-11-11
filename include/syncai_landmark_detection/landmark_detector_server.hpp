@@ -48,6 +48,9 @@ private:
   void onDetect(
     const std::shared_ptr<DetectLandmark::Request> request,
     std::shared_ptr<DetectLandmark::Response> response);
+  /** @brief A call that did not return the landmark, in the log with its reason (throttled). */
+  void logFailure(
+    const DetectLandmark::Request & request, const DetectLandmark::Response & response);
   void onStandbyTimer();
 
   pluginlib::ClassLoader<LandmarkDetector> loader_;

@@ -124,6 +124,34 @@ void ArucoDetector::initialize(
   dp("gate_rz_deg", rclcpp::ParameterValue(d.gate_rz_rad / kDegToRad));
   dp("gate_relock", rclcpp::ParameterValue(d.gate_relock));
   dp("gate_reset_sec", rclcpp::ParameterValue(d.gate_reset_sec));
+  // The camera's exposure while active (camera_exposure/exposure_policy.hpp
+  // has the why of each value; none is measured on the camera yet).
+  const camera_exposure::ExposureParams e;
+  const camera_exposure::RegionParams r;
+  dp("exposure.enabled", rclcpp::ParameterValue(true));
+  // The feeder's node name, relative so it takes the robot_id namespace.
+  dp("exposure.feeder_node", rclcpp::ParameterValue(std::string("syncai_camera_feeder")));
+  // A parameter set on the same host answers in milliseconds; a second
+  // without an answer is a feeder that is gone.
+  dp("exposure.set_timeout", rclcpp::ParameterValue(1.0));
+  dp(
+    "exposure.ladder_us",
+    rclcpp::ParameterValue(std::vector<int64_t>(e.ladder_us.begin(), e.ladder_us.end())));
+  dp("exposure.min_us", rclcpp::ParameterValue(e.min_us));
+  dp("exposure.max_us", rclcpp::ParameterValue(e.max_us));
+  dp("exposure.settle_frames", rclcpp::ParameterValue(e.settle_frames));
+  dp("exposure.miss_frames", rclcpp::ParameterValue(e.miss_frames));
+  dp("exposure.lost_frames", rclcpp::ParameterValue(e.lost_frames));
+  dp("exposure.target_p95", rclcpp::ParameterValue(e.target_p95));
+  dp("exposure.lock_p95_min", rclcpp::ParameterValue(e.lock_p95_min));
+  dp("exposure.lock_p95_max", rclcpp::ParameterValue(e.lock_p95_max));
+  dp("exposure.lock_max_saturated", rclcpp::ParameterValue(e.lock_max_saturated));
+  dp("exposure.unlock_max_saturated", rclcpp::ParameterValue(e.unlock_max_saturated));
+  dp("exposure.unlock_p95_min", rclcpp::ParameterValue(e.unlock_p95_min));
+  dp("exposure.unlock_frames", rclcpp::ParameterValue(e.unlock_frames));
+  dp("exposure.max_step", rclcpp::ParameterValue(e.max_step));
+  dp("exposure.region_scale", rclcpp::ParameterValue(r.scale));
+  dp("exposure.saturated_level", rclcpp::ParameterValue(r.saturated_level));
 
   image_topic_ = get("image_topic").as_string();
   camera_info_topic_ = get("camera_info_topic").as_string();
@@ -155,10 +183,65 @@ void ArucoDetector::initialize(
   // server's DetectLandmark answer (landmark_detector.hpp, Threading).
   callback_group_ = node->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
+  camera_exposure::ExposureParams exposure;
+  exposure.ladder_us.clear();
+  for (const int64_t us : get("exposure.ladder_us").as_integer_array()) {
+    exposure.ladder_us.push_back(static_cast<int>(us));
+  }
+  exposure.min_us = static_cast<int>(get("exposure.min_us").as_int());
+  exposure.max_us = static_cast<int>(get("exposure.max_us").as_int());
+  exposure.settle_frames = static_cast<int>(get("exposure.settle_frames").as_int());
+  exposure.miss_frames = static_cast<int>(get("exposure.miss_frames").as_int());
+  exposure.lost_frames = static_cast<int>(get("exposure.lost_frames").as_int());
+  exposure.target_p95 = get("exposure.target_p95").as_double();
+  exposure.lock_p95_min = get("exposure.lock_p95_min").as_double();
+  exposure.lock_p95_max = get("exposure.lock_p95_max").as_double();
+  exposure.lock_max_saturated = get("exposure.lock_max_saturated").as_double();
+  exposure.unlock_max_saturated = get("exposure.unlock_max_saturated").as_double();
+  exposure.unlock_p95_min = get("exposure.unlock_p95_min").as_double();
+  exposure.unlock_frames = static_cast<int>(get("exposure.unlock_frames").as_int());
+  exposure.max_step = get("exposure.max_step").as_double();
+  region_params_.scale = get("exposure.region_scale").as_double();
+  region_params_.saturated_level = static_cast<int>(get("exposure.saturated_level").as_int());
+  if (!(region_params_.scale > 0.0)) {
+    throw std::invalid_argument(name_ + ".exposure.region_scale must be > 0");
+  }
+  const bool exposure_enabled = get("exposure.enabled").as_bool();
+  const std::string feeder_node = get("exposure.feeder_node").as_string();
+  const double set_timeout = get("exposure.set_timeout").as_double();
+  if (exposure_enabled) {
+    try {
+      // Checked even when nothing is in view yet: a ladder that cannot work
+      // stops the node at start, not at the dock.
+      exposure_policy_ = camera_exposure::ExposurePolicy(exposure);
+    } catch (const std::invalid_argument & ex) {
+      throw std::invalid_argument(name_ + "." + ex.what());
+    }
+    if (!(set_timeout > 0.0)) {
+      throw std::invalid_argument(name_ + ".exposure.set_timeout must be > 0");
+    }
+    exposure_client_ = std::make_unique<camera_exposure::FeederExposureClient>(
+      node, callback_group_, feeder_node, set_timeout, name_);
+  }
+
   RCLCPP_INFO(
     logger_, "[ArucoDetector][%s] %s: %s + %s, frame_timeout %.1f s, roi %s", __func__,
     name_.c_str(), image_topic_.c_str(), camera_info_topic_.c_str(), frame_timeout_,
     roi_enabled_ ? "on" : "off");
+  if (exposure_enabled) {
+    RCLCPP_INFO(
+      logger_,
+      "[ArucoDetector][%s] %s: exposure through %s, from %d us within %d-%d us, region p95 to "
+      "%.0f (lock %.0f-%.0f, <= %.1f %% saturated)",
+      __func__, name_.c_str(), feeder_node.c_str(), exposure_policy_.exposureUs(), exposure.min_us,
+      exposure.max_us, exposure.target_p95, exposure.lock_p95_min, exposure.lock_p95_max,
+      exposure.lock_max_saturated * 100.0);
+  } else {
+    RCLCPP_INFO(
+      logger_,
+      "[ArucoDetector][%s] %s: exposure.enabled is false, the camera's exposure is left to %s",
+      __func__, name_.c_str(), feeder_node.c_str());
+  }
 }
 
 void ArucoDetector::addLandmark(const std::string & landmark_id)
@@ -263,6 +346,7 @@ void ArucoDetector::activate()
     landmark.last_box.reset();
     landmark.latest.reset();
     landmark.consecutive = 0;
+    landmark.miss.clear();
   }
   last_frame_at_.reset();
   frame_error_.clear();
@@ -289,6 +373,19 @@ void ArucoDetector::activate()
     [this](const sensor_msgs::msg::CompressedImage::ConstSharedPtr msg) { onImage(msg); }, options);
   RCLCPP_INFO(
     logger_, "[ArucoDetector][%s] %s: reading %s", __func__, name_.c_str(), image_topic_.c_str());
+
+  // The exposure the search starts from, before the first frame is judged:
+  // the frames until it shows are the policy's settle_frames.
+  exposure_running_ = exposure_client_ && exposure_client_->begin();
+  if (exposure_running_) {
+    const int start_us = exposure_policy_.start();
+    exposure_running_ = exposure_client_->set(start_us);
+    if (exposure_running_) {
+      RCLCPP_INFO(
+        logger_, "[ArucoDetector][%s] %s: exposure searching from %d us", __func__, name_.c_str(),
+        start_us);
+    }
+  }
 }
 
 void ArucoDetector::deactivate()
@@ -300,6 +397,12 @@ void ArucoDetector::deactivate()
   active_ = false;
   image_sub_.reset();
   camera_info_sub_.reset();
+  // Back to the feeder's own exposure: the console and every other viewer of
+  // the camera have had the detector's picture for as long as it was awake.
+  if (exposure_client_) {
+    exposure_client_->release();
+  }
+  exposure_running_ = false;
   RCLCPP_INFO(logger_, "[ArucoDetector][%s] %s: standby", __func__, name_.c_str());
 }
 
@@ -360,6 +463,63 @@ std::optional<Sighting> ArucoDetector::latest(const std::string & landmark_id) c
     return std::nullopt;
   }
   return it->second.latest;
+}
+
+std::string ArucoDetector::missReason(const std::string & landmark_id) const
+{
+  std::lock_guard<std::mutex> lock(mutex_);
+  const auto it = landmarks_.find(landmark_id);
+  if (it == landmarks_.end() || !active_ || it->second.miss.empty()) {
+    return {};
+  }
+  return it->second.miss + "; " + exposureStatus();
+}
+
+std::string ArucoDetector::exposureStatus() const
+{
+  if (!exposure_client_) {
+    return "exposure control off (exposure.enabled false)";
+  }
+  if (!exposure_running_) {
+    return "exposure control off: " + exposure_client_->status();
+  }
+  const bool locked = exposure_policy_.state() == camera_exposure::ExposurePolicy::State::LOCKED;
+  return std::string("exposure ") + (locked ? "locked at " : "searching at ") +
+         std::to_string(exposure_policy_.exposureUs()) + " us";
+}
+
+void ArucoDetector::stepExposure(const std::optional<camera_exposure::RegionBrightness> & region)
+{
+  if (!exposure_running_) {
+    return;
+  }
+  if (!exposure_client_->usable()) {
+    exposure_running_ = false;  // the client said why
+    return;
+  }
+  using Event = camera_exposure::ExposureStep::Event;
+  const int before_us = exposure_policy_.exposureUs();
+  const int search_frames = exposure_policy_.searchFrames() + 1;
+  const auto step = exposure_policy_.update(region);
+  if (step.sweep_finished) {
+    // Every rung tried: the marker is not in view, or not readable at any of
+    // them. Which, the frames have to say; this names what was tried.
+    RCLCPP_WARN_THROTTLE(
+      logger_, *clock_, 5000,
+      "[ArucoDetector][%s] %s: no marker at any exposure of the ladder (last %d us, %s); trying "
+      "them again",
+      __func__, name_.c_str(), before_us, step.reason.c_str());
+  }
+  if (step.event == Event::SET) {
+    RCLCPP_INFO(
+      logger_, "[ArucoDetector][%s] %s: exposure %d -> %d us: %s", __func__, name_.c_str(),
+      before_us, step.exposure_us, step.reason.c_str());
+    exposure_running_ = exposure_client_->set(step.exposure_us);
+  } else if (step.event == Event::LOCKED) {
+    RCLCPP_INFO(
+      logger_, "[ArucoDetector][%s] %s: exposure locked at %d us after %d frame(s): %s", __func__,
+      name_.c_str(), step.exposure_us, search_frames, step.reason.c_str());
+  }
 }
 
 void ArucoDetector::onCameraInfo(const sensor_msgs::msg::CameraInfo::ConstSharedPtr & msg)
@@ -432,6 +592,7 @@ void ArucoDetector::processImage(const sensor_msgs::msg::CompressedImage::ConstS
     uint16_t consecutive;
     std::optional<cv::Rect> box;
     std::optional<Sighting> sighting;  // set only when this frame gives one
+    std::string miss;                  // why not, when it gives none
   };
   struct Work
   {
@@ -474,7 +635,7 @@ void ArucoDetector::processImage(const sensor_msgs::msg::CompressedImage::ConstS
         const Landmark & landmark = landmarks_.at(id);
         w.landmarks.push_back(
           {&id, landmark.marker_id, landmark.marker_size_m, landmark.selector, landmark.consecutive,
-           landmark.last_box, std::nullopt});
+           landmark.last_box, std::nullopt, std::string()});
       }
       work.push_back(std::move(w));
     }
@@ -482,6 +643,9 @@ void ArucoDetector::processImage(const sensor_msgs::msg::CompressedImage::ConstS
 
   const cv::Rect whole(cv::Point(0, 0), gray.size());
   const double t_sec = rclcpp::Time(msg->header.stamp).seconds();
+  // The brightness of every marker found, whether or not its pose is used: a
+  // marker the gate drops is still where the exposure has to be right.
+  std::optional<camera_exposure::RegionBrightness> region;
   for (auto & w : work) {
     std::vector<std::vector<cv::Point2f>> group_corners;
     std::vector<int> group_ids;
@@ -502,10 +666,18 @@ void ArucoDetector::processImage(const sensor_msgs::msg::CompressedImage::ConstS
         landmark.box.reset();
         landmark.consecutive = 0;
         landmark.selector.miss(t_sec);
+        landmark.miss = "marker id " + std::to_string(landmark.marker_id) +
+                        " not found in the frame (" + std::to_string(group_ids.size()) +
+                        " other marker(s) of its dictionary were)";
         continue;
       }
       const auto & found = group_corners[static_cast<std::size_t>(index)];
       landmark.box = cv::boundingRect(found);
+      if (exposure_client_) {
+        if (const auto b = camera_exposure::measureRegion(gray, found, region_params_)) {
+          region = region ? camera_exposure::brighter(*region, *b) : *b;
+        }
+      }
       const auto corners = aruco::undistortCorners(found, model);
       const double size = landmark.marker_size_m;
       const auto candidates = aruco::estimateCandidates(corners, size, model.k);
@@ -516,6 +688,9 @@ void ArucoDetector::processImage(const sensor_msgs::msg::CompressedImage::ConstS
         // No possible solution, or a mirror jump: the last sighting stands
         // (it ages out at the server's max_age) and the run is broken.
         landmark.consecutive = 0;
+        landmark.miss = "marker id " + std::to_string(landmark.marker_id) + " found, " +
+                        (selection ? "its pose dropped by the gate against mirror jumps"
+                                   : "neither PnP solution passes max_rz_deg / max_tilt_deg");
         continue;
       }
       Sighting sighting;
@@ -553,11 +728,15 @@ void ArucoDetector::processImage(const sensor_msgs::msg::CompressedImage::ConstS
       landmark.selector = std::move(l.selector);
       landmark.consecutive = l.consecutive;
       landmark.last_box = l.box;
+      landmark.miss = std::move(l.miss);
       if (l.sighting) {
         landmark.latest = std::move(l.sighting);
       }
     }
   }
+  // Under the lock, the write to the feeder included (it does not block):
+  // deactivate()'s release then cannot be overtaken by this frame's step.
+  stepExposure(region);
 }
 
 std::optional<cv::Rect> ArucoDetector::groupRoi(const Group & group, const cv::Size & frame) const
