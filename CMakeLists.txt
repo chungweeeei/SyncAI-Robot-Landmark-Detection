@@ -23,6 +23,8 @@ find_package(sensor_msgs REQUIRED)
 find_package(tf2_ros REQUIRED)
 find_package(tf2_geometry_msgs REQUIRED)
 find_package(pluginlib REQUIRED)
+# SetParameters (called): the camera feeder's exposure_override_us.
+find_package(rcl_interfaces REQUIRED)
 # DetectLandmark (served).
 find_package(syncai_common REQUIRED)
 # aruco is the contrib module (libopencv-contrib-dev); calib3d for solvePnP
@@ -38,12 +40,31 @@ set(dependencies
   tf2_ros
   tf2_geometry_msgs
   pluginlib
+  rcl_interfaces
   syncai_common
 )
 
 # The plugin interface (landmark_detector.hpp) is header-only, as
 # syncai_nav_core's is: installed below and exported, so a detector plugin in
 # another package can build against it.
+
+# ---- Camera exposure --------------------------------------------------------
+# Which exposure shows a landmark, decided from the landmark's own region of
+# the frame. Beside plugins/, not inside one: nothing in it is ArUco's. The
+# policy and the measurement are ROS-free, so the gtests link them without a
+# node; the client that writes the feeder's parameter is built into the
+# plugin below.
+add_library(camera_exposure_core STATIC
+  camera_exposure/exposure_policy.cpp
+  camera_exposure/region_brightness.cpp
+)
+target_include_directories(camera_exposure_core PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  ${OpenCV_INCLUDE_DIRS})
+target_link_libraries(camera_exposure_core PUBLIC ${OpenCV_LIBS})
+# Linked into a shared plugin library.
+set_target_properties(camera_exposure_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # ---- The ArUco plugin -------------------------------------------------------
 # Its geometry and solution choice are ROS-free (OpenCV only), so the gtests
@@ -62,12 +83,15 @@ set_target_properties(aruco_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 # The plugin itself, loaded by pluginlib (landmark_detector_plugin.xml names
 # this library).
-add_library(${PROJECT_NAME}_aruco SHARED plugins/aruco_detector/aruco_detector.cpp)
+add_library(${PROJECT_NAME}_aruco SHARED
+  plugins/aruco_detector/aruco_detector.cpp
+  camera_exposure/feeder_exposure_client.cpp
+)
 target_include_directories(${PROJECT_NAME}_aruco PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 ament_target_dependencies(${PROJECT_NAME}_aruco ${dependencies})
-target_link_libraries(${PROJECT_NAME}_aruco aruco_core)
+target_link_libraries(${PROJECT_NAME}_aruco aruco_core camera_exposure_core)
 
 pluginlib_export_plugin_description_file(${PROJECT_NAME} landmark_detector_plugin.xml)
 
@@ -114,6 +138,10 @@ if(BUILD_TESTING)
   target_link_libraries(test_marker_geometry aruco_core)
   ament_add_gtest(test_solution_selector test/test_solution_selector.cpp)
   target_link_libraries(test_solution_selector aruco_core)
+  ament_add_gtest(test_exposure_policy test/test_exposure_policy.cpp)
+  target_link_libraries(test_exposure_policy camera_exposure_core)
+  ament_add_gtest(test_region_brightness test/test_region_brightness.cpp)
+  target_link_libraries(test_region_brightness camera_exposure_core)
 endif()
 
 ament_export_include_directories(include)

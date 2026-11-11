@@ -119,7 +119,10 @@ void LandmarkDetectorServer::configure()
     "detect_landmark",
     [this](
       const std::shared_ptr<DetectLandmark::Request> request,
-      std::shared_ptr<DetectLandmark::Response> response) { onDetect(request, response); },
+      std::shared_ptr<DetectLandmark::Response> response) {
+      onDetect(request, response);
+      logFailure(*request, *response);
+    },
     rmw_qos_profile_services_default, callback_group_);
   standby_timer_ = create_wall_timer(
     std::chrono::seconds(1), [this]() { onStandbyTimer(); }, callback_group_);
@@ -179,16 +182,23 @@ void LandmarkDetectorServer::onDetect(
 
   const auto sighting = detector->latest(request->landmark_id);
   const double max_age = request->max_age > 0.0F ? request->max_age : default_max_age_;
+  // Which of the method's own reasons the newest frame had for no sighting
+  // (not found, found and gated, the exposure still searching): without it a
+  // burnt-out marker and one out of view are the same "not seen".
+  const auto why = [&]() {
+    const std::string reason = detector->missReason(request->landmark_id);
+    return reason.empty() ? std::string() : ": " + reason;
+  };
   if (!sighting) {
     response->error_code = Response::NOT_DETECTED;
-    response->error_msg = request->landmark_id + " not seen since " + detector_id + " woke";
+    response->error_msg = request->landmark_id + " not seen since " + detector_id + " woke" + why();
     return;
   }
   double age = (now - rclcpp::Time(sighting->pose.header.stamp)).seconds();
   if (age > max_age) {
     response->error_code = Response::NOT_DETECTED;
     response->error_msg = request->landmark_id + " last seen " + formatSeconds(age) +
-                          " ago (max_age " + formatSeconds(max_age) + ")";
+                          " ago (max_age " + formatSeconds(max_age) + ")" + why();
     return;
   }
   // A stamp ahead of the node's clock: the feeder stamps from another clock,
@@ -229,6 +239,23 @@ void LandmarkDetectorServer::onDetect(
   response->consecutive = sighting->consecutive;
   response->ambiguous = sighting->ambiguous;
   response->reprojection_error_px = static_cast<float>(sighting->reprojection_error_px);
+}
+
+void LandmarkDetectorServer::logFailure(
+  const DetectLandmark::Request & request, const DetectLandmark::Response & response)
+{
+  using Response = DetectLandmark::Response;
+  // SENSOR_STARTING is every wake-up's first answers, not a failure. The
+  // rest go to the caller in error_msg, but the caller is a BT node polling
+  // at its own rate that may log none of it; until 2026-11 this log had only
+  // "activate" and "standby", and a charge that never saw its marker left no
+  // reason behind. Throttled: a tree polls at 10 Hz for as long as it waits.
+  if (response.error_code == Response::NONE || response.error_code == Response::SENSOR_STARTING) {
+    return;
+  }
+  RCLCPP_WARN_THROTTLE(
+    get_logger(), *get_clock(), 5000, "[LandmarkDetectorServer][%s] '%s' (code %u): %s", __func__,
+    request.landmark_id.c_str(), response.error_code, response.error_msg.c_str());
 }
 
 void LandmarkDetectorServer::onStandbyTimer()

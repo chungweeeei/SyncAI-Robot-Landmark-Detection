@@ -46,6 +46,23 @@ meanwhile (`generation_`). A new plugin follows the same pattern.
 **The camera has one opener** on the robot, `syncai_camera_feeder`. This package must never open the
 V4L2 device; it reads what the feeder publishes.
 
+**The ArUco plugin decides the camera's exposure while it is awake; the feeder writes it**
+(2026-11, `camera_exposure/`, beside `plugins/` because nothing in it is ArUco's). Auto exposure
+meters the whole frame and burns the dock's marker out, and the detector is who knows where the
+marker is. `ExposurePolicy` (ROS-free, `test/test_exposure_policy.cpp`) steps through a ladder until
+the marker reads, steers the marker region's p95 (`measureRegion`) into a band, then **holds** the
+exposure: a change moves the corners the caller is steering on, so do not make it track every
+frame. `FeederExposureClient` sets the feeder's `exposure_override_us` (µs, 0 = give it back) and
+never blocks, throws or fails a detection: no feeder (a bag replay) is one warning. The plugin
+calls it under its own mutex on purpose, so a frame's write cannot overtake `deactivate()`'s
+hand-back. "Only detects" still holds for what the service returns and for motion; the exposure is
+the plugin's sensor handling. None of its values is measured on the camera yet (README, "The
+camera's exposure").
+
+**A miss has a reason.** `LandmarkDetector::missReason()` (non-pure, empty by default) is appended
+to `NOT_DETECTED`'s `error_msg`, and the server logs every answer that is not the landmark,
+`SENSOR_STARTING` aside, throttled to 5 s (`logFailure`). A plugin sets it per landmark per frame.
+
 **The external interface is a cross-repo contract**: the package name, the executable and node name,
 the `detect_landmark` service (typed by `syncai_common`) and the parameters are used by
 SyncAI-Robot-Workspace's session specs and BT nodes. Do not rename any of them casually.

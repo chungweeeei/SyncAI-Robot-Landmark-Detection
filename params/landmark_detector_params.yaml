@@ -36,6 +36,58 @@
       gate_rz_deg: 20.0
       gate_relock: 5
       gate_reset_sec: 0.5
+      # The camera's exposure while this detector is awake, written through
+      # syncai_camera_feeder's exposure_override_us (the feeder stays the
+      # camera's one opener and writer). Auto exposure meters the whole frame
+      # and stops at 8333 us; the dock's marker is 0.4 % of it and burns out
+      # (robot01, 2026-11-11: 51 % of its pixels at 250+, the black border
+      # gone, nothing detected). So: step through ladder_us until the marker
+      # reads, steer its region's white level (the 95th percentile) to
+      # target_p95, hold that exposure for the approach (a change moves the
+      # corners the caller is steering on), and give the camera back at
+      # standby. Every viewer of the camera sees the darker picture meanwhile.
+      # A feeder that is not there (a bag replay) or stops answering costs the
+      # adjustment, with a warning, never a detection.
+      #
+      # NONE OF THESE IS MEASURED ON THE CAMERA YET. They are reasoned from the
+      # charger's experiments (camera_exposure/exposure_policy.hpp has each);
+      # first to measure: how many frames a change takes to show
+      # (settle_frames) and the marker's brightness against the exposure.
+      exposure:
+        enabled: true
+        # Relative, so it resolves under the robot_id namespace.
+        feeder_node: "syncai_camera_feeder"
+        set_timeout: 1.0
+        # Tried in order while no marker reads; the first is where every
+        # wake-up starts. 8333 = 1/120 s, the charger's start; the halvings
+        # for a lit marker and for sun on it; 16600 for a dark one.
+        ladder_us: [8333, 4166, 2083, 1000, 16600]
+        # The feeder's own clamp (one V4L2 step .. one 60 fps frame period).
+        min_us: 100
+        max_us: 16600
+        # Frames ignored after each change, then frames without the marker
+        # before the next rung: one sweep of the ladder is 40 frames, 1.3 s.
+        settle_frames: 3
+        miss_frames: 5
+        # Locked: this many frames without the marker before searching again.
+        lost_frames: 15
+        target_p95: 190.0
+        # Inside this band and under lock_max_saturated: locked.
+        lock_p95_min: 160.0
+        lock_p95_max: 220.0
+        lock_max_saturated: 0.02
+        # Locked, it moves again only past these, unlock_frames in a row:
+        # wider than the band above, so the exposure stays still while the
+        # robot walks up to the marker.
+        unlock_max_saturated: 0.10
+        unlock_p95_min: 100.0
+        unlock_frames: 3
+        # One step's largest change either way (the sensor is not linear).
+        max_step: 2.0
+        # The marker's quad grown by this before it is metered, to take in
+        # the print's white rim, which burns out first.
+        region_scale: 1.25
+        saturated_level: 250
 
     # The registry. A landmark names its detector and carries that detector's
     # parameters for it; a second dock is a second entry.
