@@ -66,6 +66,19 @@ target_link_libraries(camera_exposure_core PUBLIC ${OpenCV_LIBS})
 # Linked into a shared plugin library.
 set_target_properties(camera_exposure_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# The policy's ROS parameters, declared and read into ExposureParams: its own
+# library so a gtest can take the params-file path on a plain node.
+add_library(camera_exposure_parameters STATIC
+  camera_exposure/exposure_parameters.cpp
+)
+target_include_directories(camera_exposure_parameters PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+ament_target_dependencies(camera_exposure_parameters rclcpp)
+target_link_libraries(camera_exposure_parameters camera_exposure_core)
+# Linked into a shared plugin library.
+set_target_properties(camera_exposure_parameters PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 # ---- The ArUco plugin -------------------------------------------------------
 # Its geometry and solution choice are ROS-free (OpenCV only), so the gtests
 # link them without a node, as syncai_global_planner's Octo3D core is.
@@ -91,7 +104,8 @@ target_include_directories(${PROJECT_NAME}_aruco PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 ament_target_dependencies(${PROJECT_NAME}_aruco ${dependencies})
-target_link_libraries(${PROJECT_NAME}_aruco aruco_core camera_exposure_core)
+target_link_libraries(${PROJECT_NAME}_aruco aruco_core camera_exposure_core
+  camera_exposure_parameters)
 
 pluginlib_export_plugin_description_file(${PROJECT_NAME} landmark_detector_plugin.xml)
 
@@ -142,6 +156,8 @@ if(BUILD_TESTING)
   target_link_libraries(test_exposure_policy camera_exposure_core)
   ament_add_gtest(test_region_brightness test/test_region_brightness.cpp)
   target_link_libraries(test_region_brightness camera_exposure_core)
+  ament_add_gtest(test_exposure_parameters test/test_exposure_parameters.cpp)
+  target_link_libraries(test_exposure_parameters camera_exposure_parameters)
 endif()
 
 ament_export_include_directories(include)

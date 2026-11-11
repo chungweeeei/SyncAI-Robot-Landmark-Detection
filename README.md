@@ -120,7 +120,11 @@ deactivate() -> exposure_override_us = 0
 
 The decision is ROS-free (`camera_exposure_core`: `ExposurePolicy`, `measureRegion`), covered by
 `test/test_exposure_policy.cpp` (the ladder, convergence on a simulated sub-linear camera from a dim
-marker to a sunlit one, the lock, the limits) and `test/test_region_brightness.cpp`;
+marker to a sunlit one, the lock, the limits) and `test/test_region_brightness.cpp`. Its parameters
+reach it through `declareExposurePolicyParameters`, which `test/test_exposure_parameters.cpp` runs
+on a plain node: a ladder read through a range-for over the temporary parameter's array started
+every search at 16600 µs, or stopped the node starting when a rung came out negative, until
+2026-11-11, so run that test under AddressSanitizer when this path changes.
 `FeederExposureClient` is the one piece that talks to the feeder. `exposure.enabled: false` leaves
 the camera to the feeder.
 
