@@ -61,7 +61,8 @@ camera's exposure").
 
 **A miss has a reason.** `LandmarkDetector::missReason()` (non-pure, empty by default) is appended
 to `NOT_DETECTED`'s `error_msg`, and the server logs every answer that is not the landmark,
-`SENSOR_STARTING` aside, throttled to 5 s (`logFailure`). A plugin sets it per landmark per frame.
+`SENSOR_STARTING` aside, throttled to 5 s; a sighting it returns is logged at INFO, throttled to 1 s
+(`logAnswer`). A plugin sets it per landmark per frame.
 
 **The external interface is a cross-repo contract**: the package name, the executable and node name,
 the `detect_landmark` service (typed by `syncai_common`) and the parameters are used by

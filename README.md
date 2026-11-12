@@ -43,7 +43,8 @@ ahead of the node's clock — the two clocks disagree; less than that ahead answ
 the frame (0 other marker(s) of its dictionary were); exposure searching at 4200 us`, `... found,
 its pose dropped by the gate against mirror jumps; exposure locked at 1700 us`), and every answer
 that is not the landmark, `SENSOR_STARTING` aside, is also a warning in the node's own log, at most
-one per 5 s. With
+one per 5 s. A sighting it returns is logged at INFO, at most one per second — landmark, frame,
+xyz, roll / pitch / yaw in degrees, `age`, `consecutive`, `ambiguous`, `reprojection_error_px`. With
 `target_frame` empty it is in the camera's own frame, untransformed
 (`<robot_id>/camera_optical_frame`: z ahead, x right, y down), which needs no TF and works in every
 mode; any other frame is transformed at that stamp (`<robot_id>/base_link`: relative to the robot;
