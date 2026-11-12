@@ -43,7 +43,8 @@ ahead of the node's clock — the two clocks disagree; less than that ahead answ
 the frame (0 other marker(s) of its dictionary were); exposure searching at 4200 us`, `... found,
 its pose dropped by the gate against mirror jumps; exposure locked at 1700 us`), and every answer
 that is not the landmark, `SENSOR_STARTING` aside, is also a warning in the node's own log, at most
-one per 5 s. With
+one per 5 s. A sighting it returns is logged at INFO, at most one per second — landmark, frame,
+xyz, roll / pitch / yaw in degrees, `age`, `consecutive`, `ambiguous`, `reprojection_error_px`. With
 `target_frame` empty it is in the camera's own frame, untransformed
 (`<robot_id>/camera_optical_frame`: z ahead, x right, y down), which needs no TF and works in every
 mode; any other frame is transformed at that stamp (`<robot_id>/base_link`: relative to the robot;
@@ -120,7 +121,11 @@ deactivate() -> exposure_override_us = 0
 
 The decision is ROS-free (`camera_exposure_core`: `ExposurePolicy`, `measureRegion`), covered by
 `test/test_exposure_policy.cpp` (the ladder, convergence on a simulated sub-linear camera from a dim
-marker to a sunlit one, the lock, the limits) and `test/test_region_brightness.cpp`;
+marker to a sunlit one, the lock, the limits) and `test/test_region_brightness.cpp`. Its parameters
+reach it through `declareExposurePolicyParameters`, which `test/test_exposure_parameters.cpp` runs
+on a plain node: a ladder read through a range-for over the temporary parameter's array started
+every search at 16600 µs, or stopped the node starting when a rung came out negative, until
+2026-11-11, so run that test under AddressSanitizer when this path changes.
 `FeederExposureClient` is the one piece that talks to the feeder. `exposure.enabled: false` leaves
 the camera to the feeder.
 

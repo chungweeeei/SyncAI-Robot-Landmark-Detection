@@ -48,8 +48,12 @@ private:
   void onDetect(
     const std::shared_ptr<DetectLandmark::Request> request,
     std::shared_ptr<DetectLandmark::Response> response);
-  /** @brief A call that did not return the landmark, in the log with its reason (throttled). */
-  void logFailure(
+  /**
+   * @brief Every answer in the log: a sighting at INFO (pose, age, consecutive, reprojection
+   * error; at most one per 1 s), a call that did not return the landmark as a warning with its
+   * reason (at most one per 5 s).
+   */
+  void logAnswer(
     const DetectLandmark::Request & request, const DetectLandmark::Response & response);
   void onStandbyTimer();
 

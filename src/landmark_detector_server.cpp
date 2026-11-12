@@ -1,9 +1,12 @@
 #include "syncai_landmark_detection/landmark_detector_server.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <stdexcept>
 
 #include "syncai_landmark_detection/node_utils.hpp"
+#include "tf2/LinearMath/Matrix3x3.h"
+#include "tf2/LinearMath/Quaternion.h"
 #include "tf2_geometry_msgs/tf2_geometry_msgs.hpp"
 
 namespace syncai_landmark_detection
@@ -121,7 +124,7 @@ void LandmarkDetectorServer::configure()
       const std::shared_ptr<DetectLandmark::Request> request,
       std::shared_ptr<DetectLandmark::Response> response) {
       onDetect(request, response);
-      logFailure(*request, *response);
+      logAnswer(*request, *response);
     },
     rmw_qos_profile_services_default, callback_group_);
   standby_timer_ = create_wall_timer(
@@ -241,16 +244,38 @@ void LandmarkDetectorServer::onDetect(
   response->reprojection_error_px = static_cast<float>(sighting->reprojection_error_px);
 }
 
-void LandmarkDetectorServer::logFailure(
+void LandmarkDetectorServer::logAnswer(
   const DetectLandmark::Request & request, const DetectLandmark::Response & response)
 {
   using Response = DetectLandmark::Response;
+  if (response.error_code == Response::NONE) {
+    // A sighting: what the caller was handed, so a charge that steered
+    // somewhere odd can be read back against the pose it steered on. INFO, so
+    // it is in the node's stdout (and the session's multilog) without a log
+    // level to remember; throttled to 1 s, because a tree polls at 10 Hz for
+    // the whole approach and every answer would bury the rest of the log.
+    const auto & p = response.pose.pose;
+    double roll = 0.0;
+    double pitch = 0.0;
+    double yaw = 0.0;
+    const tf2::Quaternion q(p.orientation.x, p.orientation.y, p.orientation.z, p.orientation.w);
+    tf2::Matrix3x3(q).getRPY(roll, pitch, yaw);
+    constexpr double kDeg = 180.0 / M_PI;
+    RCLCPP_INFO_THROTTLE(
+      get_logger(), *get_clock(), 1000,
+      "[LandmarkDetectorServer][%s] '%s' in %s: xyz (%.3f, %.3f, %.3f) m, rpy (%.1f, %.1f, %.1f) "
+      "deg, age %.3f s, consecutive %u, ambiguous %s, reprojection %.2f px",
+      __func__, request.landmark_id.c_str(), response.pose.header.frame_id.c_str(), p.position.x,
+      p.position.y, p.position.z, roll * kDeg, pitch * kDeg, yaw * kDeg, response.age,
+      response.consecutive, response.ambiguous ? "yes" : "no", response.reprojection_error_px);
+    return;
+  }
   // SENSOR_STARTING is every wake-up's first answers, not a failure. The
   // rest go to the caller in error_msg, but the caller is a BT node polling
   // at its own rate that may log none of it; until 2026-11 this log had only
   // "activate" and "standby", and a charge that never saw its marker left no
   // reason behind. Throttled: a tree polls at 10 Hz for as long as it waits.
-  if (response.error_code == Response::NONE || response.error_code == Response::SENSOR_STARTING) {
+  if (response.error_code == Response::SENSOR_STARTING) {
     return;
   }
   RCLCPP_WARN_THROTTLE(

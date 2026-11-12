@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "pluginlib/class_list_macros.hpp"
+#include "syncai_landmark_detection/camera_exposure/exposure_parameters.hpp"
 #include "syncai_landmark_detection/node_utils.hpp"
 #include "tf2/LinearMath/Matrix3x3.h"
 #include "tf2/LinearMath/Quaternion.h"
@@ -124,9 +125,9 @@ void ArucoDetector::initialize(
   dp("gate_rz_deg", rclcpp::ParameterValue(d.gate_rz_rad / kDegToRad));
   dp("gate_relock", rclcpp::ParameterValue(d.gate_relock));
   dp("gate_reset_sec", rclcpp::ParameterValue(d.gate_reset_sec));
-  // The camera's exposure while active (camera_exposure/exposure_policy.hpp
-  // has the why of each value; none is measured on the camera yet).
-  const camera_exposure::ExposureParams e;
+  // The camera's exposure while active; the policy's own parameters are
+  // declared with it (declareExposurePolicyParameters, below), none of them
+  // measured on the camera yet.
   const camera_exposure::RegionParams r;
   dp("exposure.enabled", rclcpp::ParameterValue(true));
   // The feeder's node name, relative so it takes the robot_id namespace.
@@ -134,22 +135,6 @@ void ArucoDetector::initialize(
   // A parameter set on the same host answers in milliseconds; a second
   // without an answer is a feeder that is gone.
   dp("exposure.set_timeout", rclcpp::ParameterValue(1.0));
-  dp(
-    "exposure.ladder_us",
-    rclcpp::ParameterValue(std::vector<int64_t>(e.ladder_us.begin(), e.ladder_us.end())));
-  dp("exposure.min_us", rclcpp::ParameterValue(e.min_us));
-  dp("exposure.max_us", rclcpp::ParameterValue(e.max_us));
-  dp("exposure.settle_frames", rclcpp::ParameterValue(e.settle_frames));
-  dp("exposure.miss_frames", rclcpp::ParameterValue(e.miss_frames));
-  dp("exposure.lost_frames", rclcpp::ParameterValue(e.lost_frames));
-  dp("exposure.target_p95", rclcpp::ParameterValue(e.target_p95));
-  dp("exposure.lock_p95_min", rclcpp::ParameterValue(e.lock_p95_min));
-  dp("exposure.lock_p95_max", rclcpp::ParameterValue(e.lock_p95_max));
-  dp("exposure.lock_max_saturated", rclcpp::ParameterValue(e.lock_max_saturated));
-  dp("exposure.unlock_max_saturated", rclcpp::ParameterValue(e.unlock_max_saturated));
-  dp("exposure.unlock_p95_min", rclcpp::ParameterValue(e.unlock_p95_min));
-  dp("exposure.unlock_frames", rclcpp::ParameterValue(e.unlock_frames));
-  dp("exposure.max_step", rclcpp::ParameterValue(e.max_step));
   dp("exposure.region_scale", rclcpp::ParameterValue(r.scale));
   dp("exposure.saturated_level", rclcpp::ParameterValue(r.saturated_level));
 
@@ -183,24 +168,8 @@ void ArucoDetector::initialize(
   // server's DetectLandmark answer (landmark_detector.hpp, Threading).
   callback_group_ = node->create_callback_group(rclcpp::CallbackGroupType::MutuallyExclusive);
 
-  camera_exposure::ExposureParams exposure;
-  exposure.ladder_us.clear();
-  for (const int64_t us : get("exposure.ladder_us").as_integer_array()) {
-    exposure.ladder_us.push_back(static_cast<int>(us));
-  }
-  exposure.min_us = static_cast<int>(get("exposure.min_us").as_int());
-  exposure.max_us = static_cast<int>(get("exposure.max_us").as_int());
-  exposure.settle_frames = static_cast<int>(get("exposure.settle_frames").as_int());
-  exposure.miss_frames = static_cast<int>(get("exposure.miss_frames").as_int());
-  exposure.lost_frames = static_cast<int>(get("exposure.lost_frames").as_int());
-  exposure.target_p95 = get("exposure.target_p95").as_double();
-  exposure.lock_p95_min = get("exposure.lock_p95_min").as_double();
-  exposure.lock_p95_max = get("exposure.lock_p95_max").as_double();
-  exposure.lock_max_saturated = get("exposure.lock_max_saturated").as_double();
-  exposure.unlock_max_saturated = get("exposure.unlock_max_saturated").as_double();
-  exposure.unlock_p95_min = get("exposure.unlock_p95_min").as_double();
-  exposure.unlock_frames = static_cast<int>(get("exposure.unlock_frames").as_int());
-  exposure.max_step = get("exposure.max_step").as_double();
+  const camera_exposure::ExposureParams exposure =
+    camera_exposure::declareExposurePolicyParameters(node, name_);
   region_params_.scale = get("exposure.region_scale").as_double();
   region_params_.saturated_level = static_cast<int>(get("exposure.saturated_level").as_int());
   if (!(region_params_.scale > 0.0)) {
@@ -229,13 +198,18 @@ void ArucoDetector::initialize(
     name_.c_str(), image_topic_.c_str(), camera_info_topic_.c_str(), frame_timeout_,
     roi_enabled_ ? "on" : "off");
   if (exposure_enabled) {
+    // The whole ladder as read, so a start that is not the params file's first rung shows here.
+    std::string ladder_text;
+    for (const int us : exposure.ladder_us) {
+      ladder_text += (ladder_text.empty() ? "" : ", ") + std::to_string(us);
+    }
     RCLCPP_INFO(
       logger_,
-      "[ArucoDetector][%s] %s: exposure through %s, from %d us within %d-%d us, region p95 to "
-      "%.0f (lock %.0f-%.0f, <= %.1f %% saturated)",
-      __func__, name_.c_str(), feeder_node.c_str(), exposure_policy_.exposureUs(), exposure.min_us,
-      exposure.max_us, exposure.target_p95, exposure.lock_p95_min, exposure.lock_p95_max,
-      exposure.lock_max_saturated * 100.0);
+      "[ArucoDetector][%s] %s: exposure through %s, ladder [%s] us, from %d us within %d-%d us, "
+      "region p95 to %.0f (lock %.0f-%.0f, <= %.1f %% saturated)",
+      __func__, name_.c_str(), feeder_node.c_str(), ladder_text.c_str(),
+      exposure_policy_.exposureUs(), exposure.min_us, exposure.max_us, exposure.target_p95,
+      exposure.lock_p95_min, exposure.lock_p95_max, exposure.lock_max_saturated * 100.0);
   } else {
     RCLCPP_INFO(
       logger_,

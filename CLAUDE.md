@@ -61,7 +61,8 @@ camera's exposure").
 
 **A miss has a reason.** `LandmarkDetector::missReason()` (non-pure, empty by default) is appended
 to `NOT_DETECTED`'s `error_msg`, and the server logs every answer that is not the landmark,
-`SENSOR_STARTING` aside, throttled to 5 s (`logFailure`). A plugin sets it per landmark per frame.
+`SENSOR_STARTING` aside, throttled to 5 s; a sighting it returns is logged at INFO, throttled to 1 s
+(`logAnswer`). A plugin sets it per landmark per frame.
 
 **The external interface is a cross-repo contract**: the package name, the executable and node name,
 the `detect_landmark` service (typed by `syncai_common`) and the parameters are used by
@@ -87,6 +88,13 @@ docker exec syncai-robot-landmark-detection bash -lc 'cd /workspace && colcon te
 - An OpenCV 4.5.4 trap for tests: with a marker centre exactly on the camera's horizontal axis and
   noise-free corners, `SOLVEPNP_IPPE_SQUARE` returns two wrong solutions (~43 px off). Synthetic
   markers in tests sit off that axis (`test_marker_geometry.cpp`, `markerAt`).
+- A parameter read that outlives its `rclcpp::Parameter` (a range-for over
+  `get_parameter(...).as_integer_array()`) fails a Release test only where the allocator happens to
+  overwrite the freed array (the ladder's first two rungs did, 2026-11-11). `test_exposure_parameters`
+  is the guard for the exposure parameters; when that path changes, run it under AddressSanitizer
+  as well, built in its own base so the normal build is untouched:
+  `colcon build --packages-select syncai_landmark_detection --build-base build_asan --install-base install_asan --cmake-args -DCMAKE_BUILD_TYPE=Debug "-DCMAKE_CXX_FLAGS=-fsanitize=address -fno-omit-frame-pointer" -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address -DCMAKE_SHARED_LINKER_FLAGS=-fsanitize=address`,
+  then `build_asan/syncai_landmark_detection/test_exposure_parameters`.
 - If `syncai_common` is missing (a fresh volume):
   `cd /workspace && vcs import --skip-existing < src/syncai_landmark_detection/dependencies.repos`.
 - CI (`.github/workflows/ci.yml`) runs a clang-format 14 check on an ubuntu-22.04 runner and
